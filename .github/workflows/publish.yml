@@ -1,0 +1,161 @@
+name: 发布已有产物
+
+# 单独发布：把某次构建 run 的 artifact 提出来做成 Release。
+#
+# 用途：编译 5 小时成功、但「发布 Release」那步挂了的时候，
+#      不需要重编一遍，跑这个 30 秒就能补上。
+#
+# 关键设计：失败信息用 ::error:: 注解输出。
+#   Actions 的日志下载接口对未认证请求是 403，但 check annotation 是公开可读的，
+#   把 stderr 塞进注解，就能在没有日志权限的情况下定位真实原因。
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: '源构建的 run id（默认是 build #11）'
+        type: string
+        required: true
+        default: '40824419004'
+      tag:
+        description: 'Release tag，留空 = build-<源 run 的 run_number>'
+        type: string
+        required: false
+        default: ''
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  publish:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出工程
+        uses: actions/checkout@v4
+
+      - name: 读源 run 的元信息
+        id: meta
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN_ID="${{ inputs.run_id }}"
+          info=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID")
+          num=$(printf '%s' "$info" | jq -r .run_number)
+          sha=$(printf '%s' "$info" | jq -r .head_sha)
+          concl=$(printf '%s' "$info" | jq -r .conclusion)
+          echo "run_number=$num" >> "$GITHUB_OUTPUT"
+          echo "head_sha=$sha"  >> "$GITHUB_OUTPUT"
+          tag="${{ inputs.tag }}"
+          [ -n "$tag" ] || tag="build-$num"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "源 run #$num  状态=$concl  提交=$sha  ->  Release tag: $tag"
+
+      - name: 下载该 run 的产物
+        uses: actions/download-artifact@v4
+        with:
+          pattern: kwrt-ax1800-*
+          merge-multiple: true
+          path: dl
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: 校验镜像
+        run: |
+          echo "======== 下载到的文件 ========"
+          ls -lh dl
+          echo
+          f=$(ls dl/*jdcloud_re-ss-01-squashfs-factory.bin 2>/dev/null | head -1 || true)
+          if [ -z "$f" ]; then
+            echo "::error::产物里没有 factory.bin，run ${{ inputs.run_id }} 的 artifact 不完整"
+            exit 1
+          fi
+          magic=$(od -An -tx1 -N4 "$f" | tr -d ' \n')
+          if [ "$magic" != "d00dfeed" ]; then
+            echo "::error::factory.bin 头不是 FIT（$magic）"
+            exit 1
+          fi
+          fit=$(od -An -tu4 -j4 -N4 --endian=big "$f" | tr -d ' ')
+          if [ "$fit" -gt 6291456 ]; then
+            echo "::error::内核 $fit 字节超过 6MiB 分区"
+            exit 1
+          fi
+          sq=$(od -An -tx1 -j6291456 -N4 "$f" | tr -d ' \n')
+          if [ "$sq" != "68737173" ]; then
+            echo "::error::6MiB 处不是 hsqs（$sq），内核/rootfs 边界异常"
+            exit 1
+          fi
+          echo "FIT $fit 字节（$(awk -v a=$fit 'BEGIN{printf "%.3f", a/1048576}') MiB）/ 6MiB 处 hsqs 校验通过"
+          echo "fit=$fit" >> "$GITHUB_ENV"
+
+      - name: 建 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          UPSTREAM: ${{ steps.meta.outputs.head_sha }}
+        run: |
+          # 不用 set -e：gh 失败时要自己抓 stderr 再决定怎么报
+          set -uo pipefail
+          cd dl
+
+          f=$(ls *jdcloud_re-ss-01-squashfs-factory.bin | head -1)
+          up=$(ls *jdcloud_re-ss-01-squashfs-sysupgrade.bin 2>/dev/null | head -1 || true)
+          if [ -z "$up" ]; then
+            echo "::error::没有 sysupgrade.bin，无法生成在线升级用的固定文件名，中止"
+            exit 1
+          fi
+          cp -f "$up" sysupgrade.bin
+          cp -f "$f"  factory.bin
+          md5sum *jdcloud_re-ss-01* sysupgrade.bin factory.bin > md5sums.txt
+
+          cat > ../release.md <<EOF
+          京东云亚瑟 AX1800 Pro（IPQ6000 / jdcloud_re-ss-01）· Kwrt 自编
+
+          | 项 | 值 |
+          |---|---|
+          | 内核 FIT | ${fit} 字节（$(awk -v a=$fit 'BEGIN{printf "%.3f", a/1048576}') MiB，6MiB 分区） |
+          | 主题 | Argon 3.1.1-r38（页脚已去外链与作者署名） |
+          | 机型补丁 | q6 85MiB · ath11k 16VDEV/512peers |
+          | 默认 | 192.168.1.1 · 主机名 OpenWrt · SSID CLI |
+          | 上游提交 | \`${UPSTREAM:0:10}\` |
+
+          ## 首次刷机
+
+          U-Boot 网页 \`/uimage.html\` 上传 \`*-squashfs-factory.bin\`（或 \`factory.bin\`），
+          别碰 /img.html /cdt.html /art.html
+
+          ## 以后在线升级（SSH 两条命令）
+
+          \`\`\`sh
+          wget -O /tmp/fw.bin https://github.com/${{ github.repository }}/releases/latest/download/sysupgrade.bin
+          sysupgrade /tmp/fw.bin      # 保留配置；加 -n 则清空配置
+          \`\`\`
+
+          也可以 LuCI → 系统 → 备份/刷写固件 → 上传 \`sysupgrade.bin\` 并勾选「保留配置」。
+          EOF
+
+          echo "======== gh 身份 ========"
+          gh auth status 2>&1 | sed -n '1,6p' || true
+          echo
+
+          if gh release create "$TAG" \
+               --title "AX1800 Pro · $TAG" \
+               --notes-file ../release.md \
+               *jdcloud_re-ss-01* sysupgrade.bin factory.bin 2>../gh_err.txt; then
+            echo "发布成功：$TAG"
+            gh release view "$TAG" --json url,assets --jq '.url, (.assets[] | "  " + .name + "  " + (.size|tostring) + " bytes")'
+          else
+            rc=$?
+            echo "-------- gh stderr --------"
+            cat ../gh_err.txt
+            echo "--------------------------"
+            # 把真实报错塞进注解，这样没日志权限也能看到
+            msg=$(tr '\n' ' ' < ../gh_err.txt | head -c 800)
+            echo "::error::gh release create 失败（退出码 $rc）：$msg"
+            exit 1
+          fi
