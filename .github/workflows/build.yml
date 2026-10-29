@@ -164,6 +164,7 @@ jobs:
         env:
           TARGET: ${{ inputs.target }}
           WIFI_KEY: ${{ secrets.WIFI_KEY }}
+          ROOT_PASSWORD: ${{ secrets.ROOT_PASSWORD }}
         run: |
           set -x
           TARGET="${TARGET:-qualcommax_ipq60xx}"
@@ -248,6 +249,39 @@ jobs:
           fi
           set -x
           echo "[+] WiFi 密码已注入（${n} 位）"
+
+          # ---- root 密码 ----
+          # Kwrt 原来在首启脚本里写死 (echo root; echo root) | passwd root，
+          # 等于把后台密码公开印在固件里。这里改成构建时注入：
+          #   配了 Secret(ROOT_PASSWORD) → 用它
+          #   没配 → 替换成空串，首启脚本判空跳过，root 保持无密码，
+          #         首次登录 LuCI 会提示「尚未设置密码」，自己设就行
+          ROOT_PASSWORD="${ROOT_PASSWORD:-}"
+          set +x
+          python3 - "$ROOT_PASSWORD" <<'PY'
+          import io, sys
+          pw = sys.argv[1]
+          if '\n' in pw or '\r' in pw:
+              sys.exit('[x] ROOT_PASSWORD 含换行，passwd 会读错，请改 Secret')
+          esc = pw.replace("'", "'\\''")
+          p = 'feeds/kiddin9/my-default-settings/files/etc/uci-defaults/99-default-settings'
+          s = io.open(p, encoding='utf-8').read()
+          if '__ROOT_PASSWORD__' not in s:
+              sys.exit('[x] 99-default-settings 里找不到占位符 __ROOT_PASSWORD__，注入没做')
+          io.open(p, 'w', encoding='utf-8').write(s.replace('__ROOT_PASSWORD__', esc))
+          PY
+          if grep -q '__ROOT_PASSWORD__' feeds/kiddin9/my-default-settings/files/etc/uci-defaults/99-default-settings; then
+            echo "::error::root 密码注入失败，占位符还在"
+            exit 1
+          fi
+          if [ ${#ROOT_PASSWORD} -gt 0 ]; then
+            MSG="root 密码已注入（${#ROOT_PASSWORD} 位）"
+          else
+            MSG="未配 Secret(ROOT_PASSWORD)：固件 root 无密码，首次登录请立刻设置"
+            echo "::warning::$MSG"
+          fi
+          set -x
+          echo "[+] $MSG"
 
       - name: 应用 devices 补丁
         env:

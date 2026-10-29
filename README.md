@@ -5,7 +5,7 @@
 - 硬件前提：**1G 运存**（1G CDT）、**2G rootfs**（扩容 GPT）、**6 MiB HLOS 内核分区**
 - 基线：[kiddin9/Kwrt](https://github.com/kiddin9/Kwrt) `25.12`（官方 OpenWrt 25.12 + LibWrt 的 NSS 目标树）
 - 主题：Argon 3.1.x，**页脚无外链、无作者署名**
-- 编译：GitHub Actions 手动触发，约 **70–90 分钟**，成功即自动发 Release
+- 编译：GitHub Actions **每天 03:00 探测上游**，有变化才全量编（约 **4.5 小时**），也可手动 dispatch；成功即自动发 Release
 
 ## 开箱即用的默认值
 
@@ -14,11 +14,14 @@
 | 管理地址 | `192.168.1.1` |
 | 主机名 | `OpenWrt` |
 | WiFi | 双频合一，SSID `CLI` / 密码 `12345678`（WPA2-AES） |
+| 后台账号 | `root`，密码由 Secret `ROOT_PASSWORD` 决定；**没配就留空**，首次登录会提示设置 |
 | WAN | DHCP（拨号需刷完进后台改一次） |
 | IPv6 | LAN 侧已开（`ip6assign=60` + RA/DHCPv6 server） |
 | 默认主题 | Argon |
 
-> 密码可用 GitHub Secret `WIFI_KEY` 覆盖，不必改代码；`12345678` 只防误连，建议刷完改强密码。
+> WiFi 密码可用 GitHub Secret `WIFI_KEY` 覆盖，后台密码用 `ROOT_PASSWORD`，都不必改代码。`12345678` 只防误连，建议刷完改强密码。
+>
+> 后台密码特意**没有**写死成 `root`（Kwrt 上游就是 `root/root`，等于把密码印在固件里）。仓库里只有 `__ROOT_PASSWORD__` 占位符，构建设置里配了 Secret 就注入，没配就留空。
 
 ## 为什么能塞进 6 MiB
 
@@ -30,11 +33,11 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项。官方镜像
 |---|---|
 | 代理 | OpenClash 0.48.x（含 `dnsmasq-full` 四子项 / `ruby` / `kmod-tun` / `kmod-nft-tproxy` 全套依赖） |
 | VPN | WireGuard（`kmod-wireguard` + `wireguard-tools` + `luci-proto-wireguard` + `luci-lib-uqr`），内核侧是模块，不占 6 MiB |
-| 网络 | `sqm-scripts-nss` + `luci-app-sqm`、`upnp`、`ddns`、`wol`、`watchcat`、`frpc`、`turboacc`（锁 NSS ECM 模式） |
+| 网络 | `sqm-scripts-nss` + `luci-app-sqm`、`upnp`、`ddns`、`wol`、`turboacc`（锁 NSS ECM 模式） |
 | 存储 | `samba4`（U 盘共享给局域网）、`diskman`、`automount`、`block-mount`、`e2fsprogs`、`parted`、`fdisk` |
 | 工具 | `ttyd`、`quickfile`、`timedreboot`、`htop`、`nano`、`iperf3`、`iStore`、`zram-swap` |
 
-**明确不编**：Docker 全家（1G 跑不动）、`luci-app-istorerouter`、`luci-app-advancedplus`、`luci-app-footstrap-files`。
+**明确不编**：Docker 全家（1G 跑不动）、`luci-app-istorerouter`、`luci-app-advancedplus`、`luci-app-footstrap-files`、`luci-app-package-manager`（菜单位让给 iStore）、`luci-app-watchcat`、`luci-app-frpc`。
 
 ## 相对上游改了什么
 
@@ -46,7 +49,7 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项。官方镜像
 | NSS 无线内存 | `ipq6018-512m.dtsi`：`q6_region` `0x3700000`(55 MiB) → **`0x5500000`(85 MiB)** |
 | 默认网段 | Kwrt 改成 10.0.0.1，这里改回 **192.168.1.1** |
 | 主机名 | `Kwrt` → **`OpenWrt`** |
-| 推广插件 | 从 `include/target.mk` 的 `DEFAULT_PACKAGES` 摘掉 `luci-app-advancedplus`、`luci-app-footstrap-files` |
+| 推广插件 | 从 `include/target.mk` 的 `DEFAULT_PACKAGES` 摘掉 `luci-app-advancedplus`、`luci-app-footstrap-files`、`luci-app-package-manager` |
 
 每条都带 `grep -q` 前置校验，上游改写法就 `exit 1`，不会静默编出一个"看起来正常"的固件。
 
@@ -62,6 +65,30 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项。官方镜像
 | `/etc/banner` | 自绘 Q 版小猫 ASCII（原版是 Kwrt 那只 + `by Kiddin'`） |
 | `/etc/os-release` | 去掉 ` by Kiddin'`（符号链接，必须 `sed --follow-symlinks`） |
 | `CONFIG_VERSION_HOME_URL` | 由 `https://openwrt.ai/` 改成本仓库地址 |
+| 概览页 | Kwrt 的 `08_stats.js`（带宽卡）和改过的 `index.js` 全换回上游原版，见 3.1 |
+
+### 3.1 概览页与菜单
+
+Kwrt 的 `feeds/kiddin9/luci-mod-status` 和上游差得比想象多：`index.js` 被改成带 30 秒
+`sessionStorage` 缓存的懒加载版，`include/` 目录也不同（`26_ports` 代替 `29_ports`、多一个
+`11_cpu`、没有 `50_dsl`、`40_dhcp`/`60_wifi` 是重写过的胖版本）。只替换单个文件会出现
+两张端口卡、多一张 CPU 卡，而且缓存会让官方模块的按钮 30 秒内点了没反应。
+
+现在的做法是**整套对齐上游** `immortalwrt/luci@openwrt-25.12`：
+
+| 文件 | 处理 |
+|---|---|
+| `view/status/index.js` | 换成官方版，恢复官方轮询语义 |
+| `10/20/25/29/30/40/50/60_*.js` | 官方原文件 |
+| `08_stats.js`（带宽） | 空壳，`render()` 返回 `null` → 卡片永久隐藏 |
+| `11_cpu.js`、`26_ports.js` | 同上，摘掉 Kwrt 独有的卡 |
+
+原理：官方 `index.js` 只有 `render()` 返回非 `null` 时才把卡片 `display` 设回 `''`，
+返回 `null` 或 `load()` 抛错的卡片会一直保持 `display:none`，不用改任何上游代码。
+
+菜单上，`luci-app-package-manager` 被摘掉后，覆写 `luci-app-store/luasrc/controller/store.lua`
+里的 3 行路径，把 iStore 从 `服务 → iStore`（order 31）挪到一级 `软件包`（`admin/package-manager`，order 30）。
+`{"admin","store",...}` 那些 AJAX 端点刻意不动，否则页面内的请求会全部 404。
 
 ### 4. 首次开机自动配置（`diy/.../uci-defaults/99-ax1800`）
 
@@ -70,6 +97,21 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项。官方镜像
 - **IPv6**：`lan.ip6assign=60`、`dhcp.lan` 的 `dhcpv6/ra=server`、`ra_flags=managed+other`
 - **WiFi 双频合一**：所有 `wifi-iface` 统一 SSID/密码/`psk2`，11k + 11v 开（`ieee80211k` + `bss_transition` + `wnm_sleep_mode`），**11r 关**
 - **带宽**：2.4G `HT40`，5G `HE80`（160MHz 在 IPQ6000 上干扰下反而掉速）
+
+### 4.1 安全默认值（覆盖 Kwrt 的 `my-default-settings`）
+
+Kwrt 的 `99-default-settings` 会在首启时写一批"方便推广机"的设置。这里整份覆盖，只动 6 行：
+
+| 项 | Kwrt | 本工程 | 原因 |
+|---|---|---|---|
+| root 密码 | `root/root` 写死 | Secret `ROOT_PASSWORD` 注入，缺省留空 | 写死等于把密码印在固件里 |
+| `flow_offloading` / `_hw` | `1` / `1` | `0` / `0` | 软件卸载与 SQM/QoS 打架；真加速走 NSS ECM |
+| `dns_redirect` | `1` | `0` | 不再劫持 53 端口，内网自建 DNS 能用 |
+| `localservice` | `0` | `1` | dnsmasq 只监听本地 |
+| `rebind_protection` | `0` | `1` | 恢复 DNS 重绑定保护 |
+| `hostname` 兜底 | `Kwrt` | `OpenWrt` | 与品牌一致 |
+
+覆盖文件头部有 `★` 清单，上游一改这份就要重新对一遍。
 
 ### 5. 与上游默认的取舍
 

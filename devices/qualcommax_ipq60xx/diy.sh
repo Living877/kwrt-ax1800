@@ -80,11 +80,13 @@ echo "[+] 品牌串已全部回 OpenWrt（主机名 / SSID / 镜像名 / VERSION
 
 # ---- 4. 从默认包里摘掉 Kwrt 强塞的东西 ----
 # advancedplus 是 Kwrt 的“进阶设置”，推广载体；
-# footstrap-files 是网页版文件编辑器（带 prism 高亮，体积偏大），本机不需要。
-# 两者都被 common/diy.sh 塞进了 include/target.mk 的 DEFAULT_PACKAGES，
+# footstrap-files 是网页版文件编辑器（带 prism 高亮，体积偏大），本机不需要；
+# package-manager 是官方「软件包」页，它的菜单位要让给 iStore（见 diy/ 下覆盖的
+#   store.lua），两个包管理入口同时存在只会互相打架。
+# 三者都被 common/diy.sh 塞进了 include/target.mk 的 DEFAULT_PACKAGES，
 # 只在 .config 里写 is not set 是压不住的，defconfig 会把它重新加回来。
 if [ -f include/target.mk ]; then
-  for pkg in luci-app-advancedplus luci-app-footstrap-files; do
+  for pkg in luci-app-advancedplus luci-app-footstrap-files luci-app-package-manager; do
     sed -i "s/$pkg //g; s/ $pkg//g" include/target.mk
     grep -q "$pkg" include/target.mk && die "$pkg 仍在 DEFAULT_PACKAGES 里"
     echo "[+] 已从 DEFAULT_PACKAGES 摘掉 $pkg"
