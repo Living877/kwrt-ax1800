@@ -266,22 +266,34 @@ jobs:
           # 再由 defconfig 按依赖重新解算（必需项会自动回来）
           sed -n '/# Wireless Drivers/,/# end of Wireless Drivers/p' .config | sed -e 's/=m/=n/' >> .config
           sed -i "s/\(kmod-qca.*\)=m/\1=n/" .config
+          # ==== TEMP：iStore 依赖链补全（跑通后和下面那段诊断一起删）====
+          # luci.mk 对带 luasrc/ 的包强加 +luci-lua-runtime，而 pm.pl 会把
+          # 「+依赖」自身的 depends on 全部复制到上层包上；Kconfig 里 depends on
+          # 不会自动被 select 满足，于是 store 在菜单里直接不可见（连
+          # "is not set" 都不写）。先把链上两环点开，看它能不能重新出现。
+          printf '%s\n' \
+            'CONFIG_PACKAGE_luci-lua-runtime=y' \
+            'CONFIG_PACKAGE_luci-lib-taskd=y' \
+            'CONFIG_PACKAGE_mount-utils=y' >> .config
           make defconfig
           echo "======== 关键项 ========"
           grep -E "^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_|^CONFIG_PACKAGE_(luci-theme-argon|luci-app-openclash|dnsmasq-full|kmod-tun|kmod-nft-tproxy|kmod-qca-nss-ecm|kmod-ath11k-ahb|wpad-mbedtls|sqm-scripts-nss)=" .config
-          echo "======== iStore 诊断 ========"
-          echo "--- 架构符号 ---"
-          grep -E "^CONFIG_aarch64=|^CONFIG_x86_64=|^CONFIG_TARGET_qualcommax=" .config || echo "(架构符号一个都没匹配到)"
-          echo "--- .config-package.in 规模 ---"
-          wc -l tmp/.config-package.in
-          echo "--- config-package.in 里 store 相关（宽松匹配）---"
-          grep -n "luci-app-store" tmp/.config-package.in | head -5 || echo "(无)"
-          echo "--- 扫描产物 .packageinfo 里有没有它 ---"
-          wc -l tmp/.packageinfo 2>/dev/null || echo "(.packageinfo 不存在)"
-          grep -c "luci-app-store" tmp/.packageinfo 2>/dev/null || echo "(计数失败)"
-          grep -n -A4 "^Package: luci-app-store$" tmp/.packageinfo 2>/dev/null | head -20 || echo "(扫描产物里没有)"
-          echo "--- 该包的 feeds dump 日志 ---"
-          ls -l logs/feeds/kiddin9/luci-app-store/ 2>&1 | head -5
+          echo "======== iStore 依赖诊断 ========"
+          store_block() { awk '/config PACKAGE_luci-app-store$/ {f=1} f {print} f && /help$/ {exit}' tmp/.config-package.in; }
+          echo "--- store 的 Kconfig 块（含全部 depends on）---"
+          store_block
+          echo "--- 块里每个符号在同一次 defconfig 里的取值 ---"
+          for s in $(store_block | grep -oE 'PACKAGE_[A-Za-z0-9_.+-]+' | sort -u); do
+            v=$(grep -m1 -E "^CONFIG_${s}=" .config || true)
+            [ -n "$v" ] || v="(无此行 = 符号不可见)"
+            printf '  %-46s %s\n' "$s" "$v"
+          done
+          echo "--- Lua / taskd 链取值 ---"
+          for p in luci-lua-runtime lua luci-lib-base luci-lib-nixio luci-lib-ip luci-lib-jsonc \
+                   libubus-lua liblucihttp-lua ucode-mod-lua luci-lib-taskd luci-lib-xterm \
+                   taskd mount-utils libuci-lua curl tar; do
+            printf '  %-24s %s\n' "$p" "$(grep -m1 -E "^CONFIG_PACKAGE_${p}=" .config || echo '(无)')"
+          done
           echo "======== 应被关闭的项（仅打印，真正的断言在下一步「编译前校验」）========"
           # 以前这里是纯 grep，指望着「匹配不到」；但 iStore 后来改成故意开启，
           # 这条就永远匹配成功、什么也没校验；哪天把它关掉，grep 返回 1 会让
