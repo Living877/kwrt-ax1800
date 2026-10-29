@@ -362,7 +362,7 @@ fail=0
 for p in luci-theme-argon luci-app-openclash dnsmasq-full kmod-tun kmod-nft-tproxy \
          kmod-nft-fullcone kmod-qca-nss-ecm kmod-ath11k-ahb wpad-mbedtls \
          luci-app-timedreboot automount luci-app-quickfile \
-         luci-app-store mount-utils \
+         luci-app-store luci-lib-jsonc mount-utils \
          kmod-wireguard wireguard-tools luci-proto-wireguard; do
   if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
     c_red "  [x] $p 没进 .config"

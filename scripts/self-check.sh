@@ -61,6 +61,20 @@ if [ -f /usr/lib/lua/luci/controller/store.lua ]; then ok "iStore控制器在"; 
 pm=$(opkg list-installed 2>/dev/null | grep -c '^luci-app-package-manager')
 if [ "$pm" = "0" ]; then ok "package-manager已移除"; else no "package-manager仍在"; fi
 
+# controller 里 require 的 luci.* 模块必须真的存在，否则 dispatcher 建菜单时会抛
+# "module 'luci.x' not found"，整个 LuCI 500、网页全打不开（netstat 就是这么中招的）
+miss=""
+for f in /usr/lib/lua/luci/controller/*.lua; do
+	[ -f "$f" ] || continue
+	for m in $(grep -o 'require("luci\.[a-zA-Z0-9_.]*")' "$f" 2>/dev/null | sed 's/^require("//;s/")$//'); do
+		p="/usr/lib/lua/$(echo "$m" | tr '.' '/').lua"
+		if [ ! -f "$p" ]; then
+			miss="$miss $(basename "$f")->$m"
+		fi
+	done
+done
+if [ -z "$miss" ]; then ok "LuCI controller 依赖齐全"; else no "controller 缺模块:$miss"; fi
+
 lst=$(netstat -tln 2>/dev/null || ss -tln 2>/dev/null)
 echo "$lst" | grep -q ':22 '
 if [ $? -eq 0 ]; then ok "SSH:22"; else no "SSH:22未监听"; fi
