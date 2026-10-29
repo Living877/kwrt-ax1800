@@ -31,8 +31,9 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项，官方镜像
 |---|---|
 | `argon/.../footer.ut` | 原文件 3 个外链（LuCI 仓库、jerrykuku 作者仓库、`version.disturl`=openwrt.ai）全部删除，只留一行纯文本 `LuCI · Argon 3.1.x` |
 | `argon/.../footer_login.ut` | 同上，登录页页脚同样处理 |
-| `/etc/banner` | 换成自绘的小狗 ASCII（原版是 Kwrt 那只 + `by Kiddin'`） |
-| `/etc/os-release` | 去掉 ` by Kiddin'`，否则 banner 的 `%C` 展开后仍带作者名 |
+| `/etc/banner` | 换成自绘的 Q 版小猫 ASCII（原版是 Kwrt 那只 + `by Kiddin'`） |
+| `/etc/os-release` | 去掉 ` by Kiddin'`（上游写进了 `OPENWRT_RELEASE` 字段） |
+| 品牌串 | 上游 `s/OpenWrt/Kwrt/g` 扫的 7 个文件整批反向替换：主机名、默认 SSID、镜像名前缀、`VERSION_DIST`、menu 标题全回 **OpenWrt** |
 | `CONFIG_VERSION_HOME_URL` | 由 `https://openwrt.ai/` 改成本仓库地址 |
 | `luci-app-advancedplus` | 不编入（Kwrt 的"进阶设置"入口，推广载体） |
 | `luci-app-store`（iStore） | 不编入（首页带推荐位） |

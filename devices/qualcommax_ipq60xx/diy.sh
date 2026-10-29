@@ -54,10 +54,29 @@ sed -i 's|ipad=${ipaddr:-"10\.0\.0\.1"}|ipad=${ipaddr:-"192.168.1.1"}|' "$CG"
 grep -q 'ipad=${ipaddr:-"192.168.1.1"}' "$CG" || die "默认 LAN IP 没改回来（$CG）"
 echo "[+] 默认 LAN -> 192.168.1.1"
 
-# 主机名回 OpenWrt 官方默认（上游 common/diy.sh 把 OpenWrt 全替成了 Kwrt）
-sed -i "s/hostname='Kwrt'/hostname='OpenWrt'/" "$CG"
-grep -q "hostname='OpenWrt'" "$CG" || die "主机名没改成功（$CG）"
-echo "[+] 主机名 -> OpenWrt"
+# ---- 3.1 品牌串整体回 OpenWrt ----
+# 上游 common/diy.sh 有一条 sed -i "s/OpenWrt/Kwrt/g"，扫的就是下面这几个文件：
+#   config_generate（主机名）、image-config.in（镜像名）、mac80211.uc（默认 SSID）、
+#   Config.in / Config-images.in（menu 标题）、u-boot.mk、version.mk（VERSION_DIST）
+# 这里整批反向替换。banner 的 %D 取 VERSION_DIST，所以开机提示会一起变成 OpenWrt。
+BRAND_FILES="
+package/base-files/files/bin/config_generate
+package/base-files/image-config.in
+package/network/config/wifi-scripts/files/lib/wifi/mac80211.uc
+config/Config-images.in
+Config.in
+include/u-boot.mk
+include/version.mk
+"
+for f in $BRAND_FILES; do
+  [ -f "$f" ] || die "找不到 $f"
+  sed -i 's/Kwrt/OpenWrt/g' "$f"
+  echo "[+] Kwrt -> OpenWrt：$f"
+done
+grep -q "hostname='OpenWrt'" "$CG" || die "主机名没回到 OpenWrt（$CG）"
+grep -q 'VERSION_DIST:=.*OpenWrt' include/version.mk || die "VERSION_DIST 没回到 OpenWrt"
+if grep -q 'Kwrt' include/version.mk; then die "version.mk 里还有 Kwrt 残留"; fi
+echo "[+] 品牌串已全部回 OpenWrt（主机名 / SSID / 镜像名 / VERSION_DIST）"
 
 # ---- 4. 从默认包里摘掉 Kwrt 强塞的东西 ----
 # advancedplus 是 Kwrt 的“进阶设置”，推广载体；
