@@ -1,0 +1,60 @@
+#!/bin/sh /etc/rc.common
+# 开机早期从 eMMC 的 0:ART 分区切出 ath11k 校准数据。
+#
+# 为什么不能只靠上游的 /etc/hotplug.d/firmware/11-ath11k-caldata：
+#   那条链是「驱动先请求 → 内核找不到文件 → 回落用户态热插拔 → 脚本补文件」，
+#   一旦补文件超过内核的 60s 超时，驱动就以 -110（ETIMEDOUT）放弃 probe，
+#   表现是开机 dmesg 里
+#     ath11k c000000.wifi: qmi failed to load CAL data file:cal-ahb-c000000.wifi.bin
+#     ath11k c000000.wifi: failed to load board data file: -110
+#   然后 /sys/class/ieee80211/ 是空的 —— 没有 phy，也就没有无线。
+#   更糟的是 99-ax1800 里「等 phy 出现再补 wireless 配置」的后台逻辑也会
+#   一直等不到，最后连 SSID 都没有。
+#
+# 这里改成「先备好文件，再让驱动起来」：START=09 早于 kmodloader 加载
+# ath11k_ahb（模块是用户态 insmod 的，晚于本脚本），驱动 probe 时文件已在，
+# 秒过，不依赖热插拔、不赌 60s 窗口。
+#
+# 幂等：文件已存在就直接退出，不会覆盖（也不会刷新 MAC 之外的任何东西）。
+# 写 .tmp 再 mv，避免 dd 半截就留下一个坏文件，导致以后每次开机都加载坏 cal。
+
+START=09
+STOP=09
+
+CAL_DIR=/lib/firmware/ath11k/IPQ6018/hw1.0
+CAL=$CAL_DIR/cal-ahb-c000000.wifi.bin
+
+start() {
+	# 只在这台机器上动手：0:ART 在 jdcloud,re-ss-01 上是 mmcblk0p15
+	grep -qs jdcloud /proc/device-tree/compatible || return 0
+
+	if [ -s "$CAL" ]; then
+		return 0
+	fi
+
+	i=0
+	while [ "$i" -lt 5 ]; do
+		[ -b /dev/mmcblk0p15 ] && break
+		sleep 1
+		i=$((i + 1))
+	done
+	if [ ! -b /dev/mmcblk0p15 ]; then
+		logger -t caldata-early "找不到 /dev/mmcblk0p15，跳过 cal 提取"
+		return 0
+	fi
+
+	mkdir -p "$CAL_DIR"
+	# 与上游 11-ath11k-caldata 完全相同的切片：0:ART 偏移 0x1000，长度 0x10000
+	dd if=/dev/mmcblk0p15 of="$CAL.tmp" bs=4096 skip=1 count=16 2>/dev/null
+	if [ -s "$CAL.tmp" ]; then
+		mv -f "$CAL.tmp" "$CAL"
+		logger -t caldata-early "已从 0:ART 提取 cal：$(wc -c < "$CAL") 字节"
+	else
+		rm -f "$CAL.tmp"
+		logger -t caldata-early "cal 提取失败（dd 没拿到数据）"
+	fi
+}
+
+stop() {
+	return 0
+}

@@ -69,6 +69,12 @@ fi
 uci -q commit network
 uci -q commit dhcp
 
+# 真正的保障是 /etc/init.d/caldata-early（START=09，早于 ath11k 模块加载，
+# 每次开机都会检查）。这里只补一句 enable，防止打包时 rc.d 软链没自动建出来。
+if [ -x /etc/init.d/caldata-early ]; then
+	/etc/init.d/caldata-early enable 2>/dev/null
+fi
+
 # ============ 3.5 cal 兜底：ath11k 校准数据 ============
 # ath11k 在 Q6 起来后（~80s）通过 QMI 请求 cal-ahb-c000000.wifi.bin。
 # 上游 11-ath11k-caldata 热插拔脚本本应自动从 eMMC 的 0:ART 分区切出它，

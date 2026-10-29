@@ -45,6 +45,19 @@ if [ $? -eq 0 ]; then ok "NSS ECM已加载"; else no "NSS ECM未加载"; fi
 lsmod | grep -q qca_nss_drv
 if [ $? -eq 0 ]; then ok "NSS驱动已加载"; else no "NSS驱动未加载"; fi
 
+# NSS 固件：包在、文件不在 或者 驱动 -110 超时，表现都是"能上网但没有硬件加速"，
+# 不报错、不变慢到明显察觉，只能靠 dmesg 里那行 probe failed 才发现
+if [ -s /lib/firmware/qca-nss0.bin ]; then ok "NSS固件qca-nss0.bin在"; else no "缺/lib/firmware/qca-nss0.bin"; fi
+dmesg 2>/dev/null | grep -q "qca-nss 39000000.nss: probe with driver qca-nss failed"
+if [ $? -eq 0 ]; then no "qca-nss probe失败(-110)，NSS硬件加速没起来"; else ok "qca-nss probe正常"; fi
+
+# 无线校准数据：ath11k 靠它出 phy。缺这份文件 = 没有 phy = 整个无线功能消失，
+# 且内核要等满 60s 才报 -110，开机被拖长 2 分钟以上
+CAL=/lib/firmware/ath11k/IPQ6018/hw1.0/cal-ahb-c000000.wifi.bin
+if [ -s "$CAL" ]; then ok "cal data在($(wc -c < "$CAL")字节)"; else no "缺 cal-ahb-c000000.wifi.bin，无线必挂"; fi
+if [ -f /etc/hotplug.d/firmware/11-ath11k-caldata ]; then ok "caldata热插拔脚本在"; else no "缺11-ath11k-caldata"; fi
+if [ -x /etc/init.d/caldata-early ]; then ok "caldata-early(开机早期提取)在"; else no "缺/etc/init.d/caldata-early"; fi
+
 np=$(ls /sys/class/ieee80211/ 2>/dev/null | wc -w)
 if [ "$np" -ge 2 ]; then ok "phy $np 个"; else no "phy $np 个(期望2)"; fi
 nw=$(iw dev 2>/dev/null | grep -c Interface)
@@ -53,6 +66,12 @@ ssid=$(uci -q show wireless 2>/dev/null | grep -o "ssid='[^']*'" | head -1)
 if [ -n "$ssid" ]; then ok "$ssid"; else no "无SSID配置"; fi
 ps w 2>/dev/null | grep -q '[h]ostapd'
 if [ $? -eq 0 ]; then ok "hostapd运行中"; else no "hostapd未运行"; fi
+
+# WAN 载波：NO-CARRIER 是最常见也最容易误判成"固件坏了"的"故障"
+if [ -e /sys/class/net/wan ]; then
+	wanlink=$(cat /sys/class/net/wan/carrier 2>/dev/null)
+	if [ "$wanlink" = "1" ]; then ok "WAN有载波"; else no "WAN无载波(网线没插,或插在LAN口)"; fi
+fi
 
 info "rootfs $(df -h / 2>/dev/null | awk 'NR==2{print $3"/"$2"("$5")"}')"
 info "内存 $(free | awk '/^Mem:/{printf "%d/%dMB",$3/1024,$2/1024}')"
