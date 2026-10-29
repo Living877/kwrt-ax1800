@@ -53,10 +53,16 @@ uci -q commit dhcp
 # 文件已存在时，hotplug 脚本首行 `[ -e ... ] && exit 0` 会直接跳过。
 if [ -e /tmp/sysinfo/board_name ] && \
    [ ! -e /lib/firmware/ath11k/IPQ6018/hw1.0/cal-ahb-c000000.wifi.bin ]; then
-	. /lib/functions/caldata.sh 2>/dev/null
-	[ "$(board_name)" = "jdcloud,re-ss-01" ] && \
-		FIRMWARE='ath11k/IPQ6018/hw1.0/cal-ahb-c000000.wifi.bin' \
+	# 关键：caldata_extract_mmc 失败时内部 caldata_die 会 exit 1，
+	# 而 caldata.sh 是被 source 进来的，exit 会连带退出本脚本 ——
+	# 导致后面的 WiFi 段不执行、脚本被留到下次重试。必须子 shell 隔离，
+	# 让 cal 失败只影响 cal 兜底本身，主流程照常走到 WiFi 段并 return 0。
+	(
+		. /lib/functions/caldata.sh 2>/dev/null
+		[ "$(board_name)" = "jdcloud,re-ss-01" ] || exit 0
+		FIRMWARE='ath11k/IPQ6018/hw1.0/cal-ahb-c000000.wifi.bin'
 		caldata_extract_mmc '0:ART' 0x1000 0x10000 2>/dev/null
+	) || true
 fi
 
 # ============ 4. WiFi 双频合一 ============
@@ -118,10 +124,16 @@ fi
 		sleep 1
 		i=$((i + 1))
 	done
+	if [ -z "$(ls /sys/class/ieee80211/ 2>/dev/null)" ]; then
+		logger -t ax1800-wifi "等 180s 仍无 phy，ath11k 未就绪"
+		exit 0
+	fi
+	logger -t ax1800-wifi "phy 就绪，补生成无线配置"
 	/sbin/wifi config
-	uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1 || exit 0
-	apply_wifi_defaults || exit 0
+	uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1 || { logger -t ax1800-wifi "wifi config 后仍无 iface"; exit 0; }
+	apply_wifi_defaults || { logger -t ax1800-wifi "apply_wifi_defaults 失败"; exit 0; }
 	/sbin/wifi reload
+	logger -t ax1800-wifi "无线默认值已应用并 reload"
 ) >/dev/null 2>&1 &
 
 return 0
