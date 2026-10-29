@@ -41,10 +41,14 @@ fi
 
 # ============ 4. WiFi 双频合一 ============
 # 每个 radio 的 iface 用同一组 SSID/密码，即 2.4G 与 5G 同名。
-# 11k（邻居报告）+ 11v（BSS 转换管理）帮客户端挑频段；11r 单台无意义且部分
-# 老设备会连不上，关掉。
+#
+# 漫游字段（openwrt-25.12 wifi-scripts 实测）：
+#   ieee80211k = 有效，ap.uc 里翻译成 hostapd 的 rrm_neighbor_report / rrm_beacon_report
+#   bss_transition = 11v 的真正开关（wmnmode）。⚠️ 不要再写 ieee80211v，
+#     25.12 的 iface schema 里已无此字段，写了只会打 "not present in the schema" 告警且不生效
+#   ieee80211r = 有效，单台机器用不上，且部分老设备开了直接连不上，关掉
 WIFI_SSID='CLI'
-WIFI_KEY='13673361140ww'
+WIFI_KEY='__WIFI_KEY__'
 
 [ -f /etc/board.json ] || return 1
 uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1 || /sbin/wifi config
@@ -57,13 +61,15 @@ while uci -q get "wireless.@wifi-iface[$i]" >/dev/null 2>&1; do
 	uci -q set "wireless.@wifi-iface[$i].encryption=psk2"
 	uci -q set "wireless.@wifi-iface[$i].disabled=0"
 	uci -q set "wireless.@wifi-iface[$i].ieee80211k=1"
-	uci -q set "wireless.@wifi-iface[$i].ieee80211v=1"
+	uci -q set "wireless.@wifi-iface[$i].bss_transition=1"
+	uci -q set "wireless.@wifi-iface[$i].wnm_sleep_mode=1"
 	uci -q set "wireless.@wifi-iface[$i].ieee80211r=0"
 	i=$((i + 1))
 done
 [ "$i" -gt 0 ] || return 1
 
 # 按频段定带宽：2.4G HT40，5G HE80（160MHz 在亚瑟上容易掉速）
+# 注意 band 值是 mac80211.uc 里 lc(band_name) 生成的小写 2g/5g
 for r in $(uci -q show wireless | sed -n 's/^wireless\.\(radio[0-9]*\)=wifi-device$/\1/p'); do
 	case "$(uci -q get "wireless.$r.band")" in
 		2g) uci -q set "wireless.$r.htmode=HT40" ;;
