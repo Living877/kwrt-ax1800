@@ -20,8 +20,8 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项，官方镜像
 | 无线并发能力 | `ipq6000-re-ss-01.dts`：`ath11k-fw-memory-mode` `<1>` → `<0>`（8 VDEV/128 peers → **16 VDEV/512 peers**） |
 | NSS 无线内存 | `ipq6018-512m.dtsi`：`q6_region` `0x3700000`(55MiB) → **`0x5500000`(85MiB)** |
 | 默认网段 | Kwrt 改成 10.0.0.1，这里改回 **192.168.1.1** |
-| 主机名 | `Kwrt` → **`Arthur`** |
-| 推广插件 | 从 `include/target.mk` 的 `DEFAULT_PACKAGES` 摘掉 `luci-app-advancedplus` |
+| 主机名 | `Kwrt` → **`OpenWrt`**（OpenWrt 官方默认值） |
+| 推广插件 | 从 `include/target.mk` 的 `DEFAULT_PACKAGES` 摘掉 `luci-app-advancedplus`、`luci-app-footstrap-files` |
 
 每条补丁都带 `grep -q` 前置校验，匹配不上直接 `exit 1`，不会静默编出一个"看起来正常"的固件。
 
@@ -31,7 +31,8 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项，官方镜像
 |---|---|
 | `argon/.../footer.ut` | 原文件 3 个外链（LuCI 仓库、jerrykuku 作者仓库、`version.disturl`=openwrt.ai）全部删除，只留一行纯文本 `LuCI · Argon 3.1.x` |
 | `argon/.../footer_login.ut` | 同上，登录页页脚同样处理 |
-| `/etc/banner` | 换成无品牌版（原版带 `by Kiddin'`） |
+| `/etc/banner` | 换成自绘的小狗 ASCII（原版是 Kwrt 那只 + `by Kiddin'`） |
+| `/etc/os-release` | 去掉 ` by Kiddin'`，否则 banner 的 `%C` 展开后仍带作者名 |
 | `CONFIG_VERSION_HOME_URL` | 由 `https://openwrt.ai/` 改成本仓库地址 |
 | `luci-app-advancedplus` | 不编入（Kwrt 的"进阶设置"入口，推广载体） |
 | `luci-app-store`（iStore） | 不编入（首页带推荐位） |
@@ -69,7 +70,7 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项，官方镜像
 
 ```bash
 cat /proc/device-tree/model                    # JDCloud RE-SS-01
-uci get system.@system[0].hostname             # Arthur
+uci get system.@system[0].hostname             # OpenWrt
 uci get network.lan.ipaddr                     # 192.168.1.1
 dmesg | grep -i "memory:"                      # 1G 的迹象
 lsmod | grep qca_nss | wc -l                   # 20+ 个 NSS 模块

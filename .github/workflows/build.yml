@@ -160,6 +160,10 @@ jobs:
             echo "::error::advancedplus 还在，去推广没生效"
             fail=1
           fi
+          if grep -q "^CONFIG_PACKAGE_luci-app-footstrap-files=y" .config; then
+            echo "::error::footstrap-files 还在，没摘干净"
+            fail=1
+          fi
           if grep -q "^CONFIG_TARGET_ALL_PROFILES=y" .config; then
             echo "::error::还在编全机型，会让时间翻几倍"
             fail=1
@@ -215,7 +219,7 @@ jobs:
             echo "| 内核 FIT | $fit 字节（$(awk -v a=$fit 'BEGIN{printf "%.3f", a/1048576}') MiB，6MiB 分区） |"
             echo "| 主题 | Argon 3.x（页脚已去外链） |"
             echo "| 机型补丁 | q6 85MiB · ath11k 16VDEV/512peers |"
-            echo "| 默认 | 192.168.1.1 · 主机名 Arthur |"
+            echo "| 默认 | 192.168.1.1 · 主机名 OpenWrt |"
             echo
             echo "刷机：U-Boot 网页 \`/uimage.html\` 上传 \`*-squashfs-factory.bin\`，别碰 /img.html /cdt.html /art.html"
             echo

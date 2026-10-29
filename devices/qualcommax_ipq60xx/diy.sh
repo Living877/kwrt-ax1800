@@ -54,18 +54,33 @@ sed -i 's|ipad=${ipaddr:-"10\.0\.0\.1"}|ipad=${ipaddr:-"192.168.1.1"}|' "$CG"
 grep -q 'ipad=${ipaddr:-"192.168.1.1"}' "$CG" || die "默认 LAN IP 没改回来（$CG）"
 echo "[+] 默认 LAN -> 192.168.1.1"
 
-sed -i "s/hostname='Kwrt'/hostname='Arthur'/" "$CG"
-grep -q "hostname='Arthur'" "$CG" || die "主机名没改成功（$CG）"
-echo "[+] 主机名 -> Arthur"
+# 主机名回 OpenWrt 官方默认（上游 common/diy.sh 把 OpenWrt 全替成了 Kwrt）
+sed -i "s/hostname='Kwrt'/hostname='OpenWrt'/" "$CG"
+grep -q "hostname='OpenWrt'" "$CG" || die "主机名没改成功（$CG）"
+echo "[+] 主机名 -> OpenWrt"
 
-# ---- 4. 从默认包里摘掉 Kwrt 的推广插件 ----
-# advancedplus 被 common/diy.sh 塞进了 include/target.mk 的 DEFAULT_PACKAGES，
+# ---- 4. 从默认包里摘掉 Kwrt 强塞的东西 ----
+# advancedplus 是 Kwrt 的“进阶设置”，推广载体；
+# footstrap-files 是网页版文件编辑器（带 prism 高亮，体积偏大），本机不需要。
+# 两者都被 common/diy.sh 塞进了 include/target.mk 的 DEFAULT_PACKAGES，
 # 只在 .config 里写 is not set 是压不住的，defconfig 会把它重新加回来。
 if [ -f include/target.mk ]; then
-  sed -i 's/luci-app-advancedplus //g; s/ luci-app-advancedplus//g' include/target.mk
-  grep -q 'luci-app-advancedplus' include/target.mk && die "advancedplus 仍在 DEFAULT_PACKAGES 里"
-  echo "[+] 已从 DEFAULT_PACKAGES 摘掉 luci-app-advancedplus"
+  for pkg in luci-app-advancedplus luci-app-footstrap-files; do
+    sed -i "s/$pkg //g; s/ $pkg//g" include/target.mk
+    grep -q "$pkg" include/target.mk && die "$pkg 仍在 DEFAULT_PACKAGES 里"
+    echo "[+] 已从 DEFAULT_PACKAGES 摘掉 $pkg"
+  done
 fi
+
+# ---- 4.1 去掉作者署名（os-release / openwrt_release 里的 " by Kiddin'"）----
+# 上游 common/diy.sh: sed "s#%C\"#%C by Kiddin'\"#" package/base-files/files/etc/os-release
+# banner 里的 %C 会展开成 DISTRIB_DESCRIPTION，不清理掉的话开机提示照样带作者名。
+for f in package/base-files/files/etc/os-release package/base-files/files/etc/openwrt_release; do
+  [ -f "$f" ] || continue
+  sed -i "s/ by Kiddin'//g; s/ by Kiddin//g" "$f"
+  if grep -q 'Kiddin' "$f"; then die "作者署名没清干净（$f）"; fi
+  echo "[+] 已清理作者署名 -> $f"
+done
 
 # ---- 5. 确认主题与插件真的在源码树里 ----
 [ -d feeds/kiddin9/luci-theme-argon ] || die "feeds/kiddin9/luci-theme-argon 不存在，主题装不上"
