@@ -3,8 +3,9 @@
 #
 # 由 /etc/init.d/boot 的 uci_apply_defaults 用 `.` 引入执行，顺序是：
 #   wifi config（生成默认无线配置）→ kmodloader → uci-defaults → 各服务启动
-# 所以这里能直接改到 radio0/radio1。若无线还没生成（驱动未就绪），
-# 返回 1 让脚本留在 /etc/uci-defaults 下，下次启动重试；网络部分已提交。
+# 所以这里能直接改到 radio0/radio1。ath11k 要 ~80s 才注册 phy（Q6 固件 +
+# QMI 握手），此刻 wifi config 生成不出 radio —— 慢路径不 return 1（否则每次
+# 开机都在同一早时机重试、永远完不成），而是后台等 phy 出现后补配置，见第 4 段。
 #
 # 注意：这些值同时会被写入 /etc/config/{network,dhcp,wireless,luci}，
 # 刷机后照样能在 LuCI 里改，这里只决定"第一次开机的默认值"。
@@ -40,11 +41,23 @@ if ! uci -q get network.wan6 >/dev/null 2>&1; then
 	uci -q set network.wan6.reqprefix='auto'
 fi
 
-# 这里先落盘。下面第 4 段一旦判断无线还没就绪就 return 1，脚本会被留在
-# /etc/uci-defaults 里等下次开机重试；如果 commit 放在文件末尾，这次设好的
-# 主题/IPv6 就只存在于 /tmp/.uci 的内存增量里，重启即丢。
+# 主题/IPv6/WAN 先落盘，让它们不依赖第 4 段无线是否就绪都能立即生效。
 uci -q commit network
 uci -q commit dhcp
+
+# ============ 3.5 cal 兜底：ath11k 校准数据 ============
+# ath11k 在 Q6 起来后（~80s）通过 QMI 请求 cal-ahb-c000000.wifi.bin。
+# 上游 11-ath11k-caldata 热插拔脚本本应自动从 eMMC 的 0:ART 分区切出它，
+# 但首次启动（刷机后）偶发因 board_name/分区枚举时序失败，驱动等 60s 后
+# -110 超时、phy 不完整。这里在 boot 早期（远早于 80s）主动生成一份；
+# 文件已存在时，hotplug 脚本首行 `[ -e ... ] && exit 0` 会直接跳过。
+if [ -e /tmp/sysinfo/board_name ] && \
+   [ ! -e /lib/firmware/ath11k/IPQ6018/hw1.0/cal-ahb-c000000.wifi.bin ]; then
+	. /lib/functions/caldata.sh 2>/dev/null
+	[ "$(board_name)" = "jdcloud,re-ss-01" ] && \
+		FIRMWARE='ath11k/IPQ6018/hw1.0/cal-ahb-c000000.wifi.bin' \
+		caldata_extract_mmc '0:ART' 0x1000 0x10000 2>/dev/null
+fi
 
 # ============ 4. WiFi 双频合一 ============
 # 每个 radio 的 iface 用同一组 SSID/密码，即 2.4G 与 5G 同名。
@@ -57,35 +70,58 @@ uci -q commit dhcp
 WIFI_SSID='CLI'
 WIFI_KEY='__WIFI_KEY__'
 
+# 把默认值套到已生成的 radio/iface 上（同步快路径与后台兜底路径共用）。
+apply_wifi_defaults() {
+	local i=0 r
+	while uci -q get "wireless.@wifi-iface[$i]" >/dev/null 2>&1; do
+		uci -q set "wireless.@wifi-iface[$i].ssid=$WIFI_SSID"
+		uci -q set "wireless.@wifi-iface[$i].key=$WIFI_KEY"
+		uci -q set "wireless.@wifi-iface[$i].encryption=psk2"
+		uci -q set "wireless.@wifi-iface[$i].disabled=0"
+		uci -q set "wireless.@wifi-iface[$i].ieee80211k=1"
+		uci -q set "wireless.@wifi-iface[$i].bss_transition=1"
+		uci -q set "wireless.@wifi-iface[$i].wnm_sleep_mode=1"
+		uci -q set "wireless.@wifi-iface[$i].disassoc_low_ack=0"
+		uci -q set "wireless.@wifi-iface[$i].ieee80211r=0"
+		i=$((i + 1))
+	done
+	[ "$i" -gt 0 ] || return 1
+
+	# 按频段定带宽：2.4G HT40，5G HE80（160MHz 在亚瑟上容易掉速）
+	# 注意 band 值是 mac80211.uc 里 lc(band_name) 生成的小写 2g/5g
+	for r in $(uci -q show wireless | sed -n 's/^wireless\.\(radio[0-9]*\)=wifi-device$/\1/p'); do
+		case "$(uci -q get "wireless.$r.band")" in
+			2g) uci -q set "wireless.$r.htmode=HT40" ;;
+			5g) uci -q set "wireless.$r.htmode=HE80" ;;
+		esac
+		uci -q set "wireless.$r.disabled=0"
+	done
+	uci -q commit wireless
+}
+
 [ -f /etc/board.json ] || return 1
 uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1 || /sbin/wifi config
-uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1 || return 1
 
-i=0
-while uci -q get "wireless.@wifi-iface[$i]" >/dev/null 2>&1; do
-	uci -q set "wireless.@wifi-iface[$i].ssid=$WIFI_SSID"
-	uci -q set "wireless.@wifi-iface[$i].key=$WIFI_KEY"
-	uci -q set "wireless.@wifi-iface[$i].encryption=psk2"
-	uci -q set "wireless.@wifi-iface[$i].disabled=0"
-	uci -q set "wireless.@wifi-iface[$i].ieee80211k=1"
-	uci -q set "wireless.@wifi-iface[$i].bss_transition=1"
-	uci -q set "wireless.@wifi-iface[$i].wnm_sleep_mode=1"
-	uci -q set "wireless.@wifi-iface[$i].disassoc_low_ack=0"
-	uci -q set "wireless.@wifi-iface[$i].ieee80211r=0"
-	i=$((i + 1))
-done
-[ "$i" -gt 0 ] || return 1
+# 快路径：phy 已在（极少见），同步套默认值
+if uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1; then
+	apply_wifi_defaults || return 1
+	return 0
+fi
 
-# 按频段定带宽：2.4G HT40，5G HE80（160MHz 在亚瑟上容易掉速）
-# 注意 band 值是 mac80211.uc 里 lc(band_name) 生成的小写 2g/5g
-for r in $(uci -q show wireless | sed -n 's/^wireless\.\(radio[0-9]*\)=wifi-device$/\1/p'); do
-	case "$(uci -q get "wireless.$r.band")" in
-		2g) uci -q set "wireless.$r.htmode=HT40" ;;
-		5g) uci -q set "wireless.$r.htmode=HE80" ;;
-	esac
-	uci -q set "wireless.$r.disabled=0"
-done
-
-uci -q commit wireless
+# 慢路径：ath11k 要 ~80s 才注册 phy（Q6 固件 + QMI 握手），此刻 wifi config
+# 生成不出 radio。不能 return 1 —— 下次开机仍在同一早时机，永远重试不完。
+# 改后台等 phy 出现后补配置；这只在刷机后首次启动发生，之后无线配置已持久化。
+(
+	i=0
+	while [ $i -lt 180 ]; do
+		[ -n "$(ls /sys/class/ieee80211/ 2>/dev/null)" ] && break
+		sleep 1
+		i=$((i + 1))
+	done
+	/sbin/wifi config
+	uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1 || exit 0
+	apply_wifi_defaults || exit 0
+	/sbin/wifi reload
+) >/dev/null 2>&1 &
 
 return 0
