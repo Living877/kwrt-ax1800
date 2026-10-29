@@ -12,3 +12,6 @@ Thumbs.db
 *.swp
 .idea/
 .vscode/
+
+# 会话记忆/自动化状态，属于本机工具数据，不进仓库
+.workbuddy/
