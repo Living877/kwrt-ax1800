@@ -209,8 +209,37 @@ jobs:
           # 注入 WiFi 密码：默认 12345678，配了 Secret(WIFI_KEY) 则用它覆盖
           # 仓库里只存占位符，不存任何密码明文
           WIFI_KEY="${WIFI_KEY:-12345678}"
-          sed -i "s#__WIFI_KEY__#$WIFI_KEY#g" package/base-files/files/etc/uci-defaults/99-ax1800
-          echo "[+] WiFi 密码已注入（${#WIFI_KEY} 位）"
+
+          # 长度必须落在 WPA2-PSK 的合法区间，否则 hostapd 直接不启动，
+          # 结果就是刷完开箱没有 WiFi，只能插网线救
+          n=${#WIFI_KEY}
+          if [ "$n" -lt 8 ] || [ "$n" -gt 63 ]; then
+            echo "::error::WIFI_KEY 长度 $n 位，WPA2-PSK 只接受 8-63 位，请改 Secret 后重跑"
+            exit 1
+          fi
+
+          # 用 python 做「字面」替换，不用 sed：
+          #   sed 替换串里的 & 代表整个匹配内容 → 密码含 & 会被静默改成 __WIFI_KEY__
+          #   # 会破坏 s#...# 的定界符 → 密码含 # 直接报错
+          #   密码含单引号会让生成的 WIFI_KEY='...' 断引号 → 整个首启脚本语法错误，
+          #   一条都不执行（没有 SSID、没有 IPv6、主题也不生效）
+          set +x          # 密码会作为参数出现在命令行，关掉回显免得进构建日志
+          python3 - "$WIFI_KEY" <<'PY'
+          import io, sys
+          key = sys.argv[1]
+          esc = key.replace("'", "'\\''")          # shell 单引号串内转义单引号
+          p = 'package/base-files/files/etc/uci-defaults/99-ax1800'
+          s = io.open(p, encoding='utf-8').read()
+          if '__WIFI_KEY__' not in s:
+              sys.exit('[x] 99-ax1800 里找不到占位符 __WIFI_KEY__，注入没做')
+          io.open(p, 'w', encoding='utf-8').write(s.replace('__WIFI_KEY__', esc))
+          PY
+          if grep -q '__WIFI_KEY__' package/base-files/files/etc/uci-defaults/99-ax1800; then
+            echo "::error::密码注入失败，占位符还在"
+            exit 1
+          fi
+          set -x
+          echo "[+] WiFi 密码已注入（${n} 位）"
 
       - name: 应用 devices 补丁
         env:
@@ -240,8 +269,11 @@ jobs:
           make defconfig
           echo "======== 关键项 ========"
           grep -E "^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_|^CONFIG_PACKAGE_(luci-theme-argon|luci-app-openclash|dnsmasq-full|kmod-tun|kmod-nft-tproxy|kmod-qca-nss-ecm|kmod-ath11k-ahb|wpad-mbedtls|sqm-scripts-nss)=" .config
-          echo "======== 应被关闭的项 ========"
-          grep -E "luci-app-advancedplus|luci-app-store|dockerman|CONFIG_ALL_NONSHARED|TARGET_ALL_PROFILES" .config
+          echo "======== 应被关闭的项（仅打印，真正的断言在下一步「编译前校验」）========"
+          # 以前这里是纯 grep，指望着「匹配不到」；但 iStore 后来改成故意开启，
+          # 这条就永远匹配成功、什么也没校验；哪天把它关掉，grep 返回 1 会让
+          # 整步失败。加 || true 兜底，避免反向咬人。
+          grep -E "luci-app-advancedplus|luci-app-footstrap-files|dockerman|CONFIG_ALL_NONSHARED|CONFIG_TARGET_ALL_PROFILES" .config || echo "(以上均未出现，符合预期)"
 
       - name: 编译前校验
         # 定时触发时 inputs.* 为空，原来的 inputs.skip_check == false 会算成 false

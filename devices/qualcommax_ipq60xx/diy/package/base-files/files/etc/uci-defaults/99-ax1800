@@ -14,6 +14,7 @@
 # ============ 1. 默认主题 Argon 3.x ============
 uci -q get luci.main >/dev/null 2>&1 || uci -q set luci.main=core
 uci -q set luci.main.mediaurlbase='/luci-static/argon'
+uci -q commit luci
 
 # ============ 2. IPv6：内核已开 CONFIG_IPV6，这里把 LAN 侧分发打开 ============
 # ip6assign=60 从 WAN 拿到的 PD 里切 /60 给 LAN；ra/dhcpv6 让下游能拿到地址
@@ -38,6 +39,12 @@ if ! uci -q get network.wan6 >/dev/null 2>&1; then
 	uci -q set network.wan6.reqaddress='try'
 	uci -q set network.wan6.reqprefix='auto'
 fi
+
+# 这里先落盘。下面第 4 段一旦判断无线还没就绪就 return 1，脚本会被留在
+# /etc/uci-defaults 里等下次开机重试；如果 commit 放在文件末尾，这次设好的
+# 主题/IPv6 就只存在于 /tmp/.uci 的内存增量里，重启即丢。
+uci -q commit network
+uci -q commit dhcp
 
 # ============ 4. WiFi 双频合一 ============
 # 每个 radio 的 iface 用同一组 SSID/密码，即 2.4G 与 5G 同名。
@@ -78,9 +85,6 @@ for r in $(uci -q show wireless | sed -n 's/^wireless\.\(radio[0-9]*\)=wifi-devi
 	uci -q set "wireless.$r.disabled=0"
 done
 
-uci -q commit luci
-uci -q commit network
-uci -q commit dhcp
 uci -q commit wireless
 
 return 0
