@@ -1,7 +1,14 @@
 name: Build Kwrt · AX1800 Pro
 
-# 只在手动点「Run workflow」时跑。
-# 上游仓库只有 repository_dispatch（要靠维护者自己的 token 触发），fork 后必须自己加这个入口。
+# 两种触发方式：
+#   1) workflow_dispatch —— 手动点「Run workflow」，无条件编译（拿当天最新上游）
+#   2) schedule          —— 每周一定时跑，先探测 5 个上游源的 HEAD，
+#                          跟 .build-state 里上次构建记录比对，没变就跳过，变了才编
+#
+# 上游源码全部是 --depth 1 现拉、不 pin 版本，所以「手动触发即最新」。
+# 定时任务是无人值守的加速版本，省的是「上游没动却白编 90 分钟」。
+#
+# 注意：GitHub 会在仓库连续 60 天无活动后自动禁用 schedule，需要手动点一次唤醒。
 
 on:
   workflow_dispatch:
@@ -14,6 +21,9 @@ on:
         description: '跳过编译前的关键包校验（不建议）'
         type: boolean
         default: false
+  schedule:
+    # 每周一 02:00（北京时间）= 每周日 18:00 UTC
+    - cron: '0 18 * * 0'
 
 permissions:
   contents: write
@@ -22,7 +32,89 @@ env:
   TZ: Asia/Shanghai
 
 jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    outputs:
+      changed: ${{ steps.check.outputs.changed }}
+      openwrt: ${{ steps.check.outputs.openwrt }}
+      immortalwrt: ${{ steps.check.outputs.immortalwrt }}
+      libwrt_tree: ${{ steps.check.outputs.libwrt_tree }}
+      libwrt_cfg: ${{ steps.check.outputs.libwrt_cfg }}
+      oppackages: ${{ steps.check.outputs.oppackages }}
+    steps:
+      - name: 检出工程
+        uses: actions/checkout@v4
+
+      - name: 探测上游是否有更新
+        id: check
+        run: |
+          set -eu
+          # 只判定 5 个真正决定固件内容的源：
+          #   openwrt/openwrt      openwrt-25.12  主树
+          #   immortalwrt          openwrt-25.12  openssl / ppp + 5 个内核与 nftables 补丁
+          #   LiBwrt/openwrt-6.x   25.12-nss      NSS 目标树、ath11k、mac80211（最关键）
+          #   LiBwrt/LibWrt        25.12-nss      image-commands.mk / Config-ipq.in / Config.in
+          #   kiddin9/op-packages  main           argon / openclash / turboacc 等插件
+          # coolsnowwolf/lede（hack-6.12）、qosmio/sqm-scripts-nss、laipeng668/nss-packages
+          # 影响窄，且 lede master 每天多次提交，纳入会让「有变化」永远成立，故不参与判定。
+          sha() {
+            git ls-remote "https://github.com/$1" "refs/heads/$2" 2>/dev/null | awk '{print $1}' | head -1
+          }
+          OW=$(sha openwrt/openwrt openwrt-25.12)
+          IW=$(sha immortalwrt/immortalwrt openwrt-25.12)
+          LT=$(sha LiBwrt/openwrt-6.x 25.12-nss)
+          LC=$(sha LiBwrt/LibWrt 25.12-nss)
+          OP=$(sha kiddin9/op-packages main)
+
+          for pair in "openwrt:$OW" "immortalwrt:$IW" "libwrt_tree:$LT" "libwrt_cfg:$LC" "oppackages:$OP"; do
+            if [ -z "${pair#*:}" ]; then
+              echo "::error::探测 ${pair%%:*} 失败，拿不到 HEAD sha"
+              exit 1
+            fi
+          done
+
+          STATE=.build-state
+          prev() {
+            if [ -f "$STATE" ]; then
+              grep -m1 "^$1=" "$STATE" 2>/dev/null | cut -d= -f2- || true
+            fi
+          }
+
+          changed=0
+          echo "上游 HEAD 与上次构建记录比对："
+          for pair in "openwrt:$OW" "immortalwrt:$IW" "libwrt_tree:$LT" "libwrt_cfg:$LC" "oppackages:$OP"; do
+            k="${pair%%:*}"; v="${pair#*:}"
+            p=$(prev "$k")
+            if [ "$p" = "$v" ]; then
+              printf '  %-14s %s  (无变化)\n' "$k" "$(echo "$v" | cut -c1-10)"
+            else
+              printf '  %-14s %s -> %s  (有变化)\n' "$k" \
+                "$(echo "${p:-<无记录>}" | cut -c1-10)" "$(echo "$v" | cut -c1-10)"
+              changed=1
+            fi
+          done
+
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "触发方式：手动 → 无条件编译"
+            changed=1
+          else
+            echo "触发方式：定时"
+          fi
+
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "openwrt=$OW"
+            echo "immortalwrt=$IW"
+            echo "libwrt_tree=$LT"
+            echo "libwrt_cfg=$LC"
+            echo "oppackages=$OP"
+          } >> "$GITHUB_OUTPUT"
+
   build:
+    needs: probe
+    # probe 判定上游无变化时整段跳过，不浪费 90 分钟
+    if: needs.probe.outputs.changed == '1'
     runs-on: ubuntu-22.04
     timeout-minutes: 350
 
@@ -152,7 +244,9 @@ jobs:
           grep -E "luci-app-advancedplus|luci-app-store|dockerman|CONFIG_ALL_NONSHARED|TARGET_ALL_PROFILES" .config
 
       - name: 编译前校验
-        if: ${{ inputs.skip_check == false }}
+        # 定时触发时 inputs.* 为空，原来的 inputs.skip_check == false 会算成 false
+        # 从而静默跳过校验；显式判断事件类型才能保证定时构建照样校验
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.skip_check == false }}
         run: |
           cd openwrt
           fail=0
@@ -220,22 +314,81 @@ jobs:
           cd openwrt/bin/targets/qualcommax/ipq60xx
           f=$(ls *jdcloud_re-ss-01-squashfs-factory.bin | head -1)
           fit=$(od -An -tu4 -j4 -N4 --endian=big "$f" | tr -d ' ')
+          OW_SHORT=$(echo "${{ needs.probe.outputs.openwrt }}" | cut -c1-10)
+          LT_SHORT=$(echo "${{ needs.probe.outputs.libwrt_tree }}" | cut -c1-10)
+
+          # 额外附一份固定文件名的镜像。
+          # 这样 releases/latest/download/sysupgrade.bin 永远指向最新版，
+          # 升级不用再去翻 Release 页面找带版本号的长文件名。
+          cp -f "$(ls *jdcloud_re-ss-01-squashfs-sysupgrade.bin | head -1)" sysupgrade.bin
+          cp -f "$f" factory.bin
+
           md5sum *jdcloud_re-ss-01* > md5sums.txt
+          md5sum sysupgrade.bin factory.bin >> md5sums.txt
           {
             echo "京东云亚瑟 AX1800 Pro（IPQ6000 / jdcloud_re-ss-01）· Kwrt 自编"
             echo
             echo "| 项 | 值 |"
             echo "|---|---|"
             echo "| 内核 FIT | $fit 字节（$(awk -v a=$fit 'BEGIN{printf "%.3f", a/1048576}') MiB，6MiB 分区） |"
-            echo "| 主题 | Argon 3.x（页脚已去外链） |"
+            echo "| 主题 | Argon 3.1.1-r38（页脚已去外链与作者署名） |"
             echo "| 机型补丁 | q6 85MiB · ath11k 16VDEV/512peers |"
-            echo "| 默认 | 192.168.1.1 · 主机名 OpenWrt |"
+            echo "| 默认 | 192.168.1.1 · 主机名 OpenWrt · SSID CLI |"
+            echo "| 上游 | openwrt-25.12 \`$OW_SHORT\` · LibWrt NSS \`$LT_SHORT\` |"
             echo
-            echo "刷机：U-Boot 网页 \`/uimage.html\` 上传 \`*-squashfs-factory.bin\`，别碰 /img.html /cdt.html /art.html"
+            echo "## 首次刷机"
             echo
-            echo "以后升级用 \`*-squashfs-sysupgrade.bin\`"
+            echo "U-Boot 网页 \`/uimage.html\` 上传 \`*-squashfs-factory.bin\`（或 \`factory.bin\`），"
+            echo "别碰 /img.html /cdt.html /art.html"
+            echo
+            echo "## 以后在线升级（SSH 两条命令）"
+            echo
+            echo '```sh'
+            echo "wget -O /tmp/fw.bin https://github.com/${{ github.repository }}/releases/latest/download/sysupgrade.bin"
+            echo "sysupgrade /tmp/fw.bin      # 保留配置；加 -n 则清空配置"
+            echo '```'
+            echo
+            echo "也可以 LuCI → 系统 → 备份/刷写固件 → 上传 \`sysupgrade.bin\` 并勾选「保留配置」。"
           } > release.md
           gh release create "build-${GITHUB_RUN_NUMBER}" \
             --title "AX1800 Pro · build ${GITHUB_RUN_NUMBER}" \
             --notes-file release.md \
-            *jdcloud_re-ss-01*
+            *jdcloud_re-ss-01* sysupgrade.bin factory.bin
+
+  record:
+    # 只有编译成功才记录上游版本。失败时保留旧记录，下一轮定时任务会重试同一个上游版本。
+    needs: [probe, build]
+    if: needs.build.result == 'success'
+    runs-on: ubuntu-22.04
+    steps:
+      - name: 检出工程
+        uses: actions/checkout@v4
+
+      - name: 写回本次构建用到的上游版本
+        run: |
+          set -eu
+          # 用 echo 而不是 heredoc：heredoc 内容会带上 YAML 的缩进空格，
+          # 导致 .build-state 每行前面多出空格，probe 里的 ^key= 就匹配不到了
+          {
+            echo "# 由 workflow 自动维护，记录上一次成功构建时用到的上游 HEAD"
+            echo "# 定时任务据此判断上游有没有变化，没变就不编译"
+            echo "openwrt=${{ needs.probe.outputs.openwrt }}"
+            echo "immortalwrt=${{ needs.probe.outputs.immortalwrt }}"
+            echo "libwrt_tree=${{ needs.probe.outputs.libwrt_tree }}"
+            echo "libwrt_cfg=${{ needs.probe.outputs.libwrt_cfg }}"
+            echo "oppackages=${{ needs.probe.outputs.oppackages }}"
+            echo "built_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            echo "build=${{ github.run_number }}"
+          } > .build-state
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .build-state
+          if git diff --cached --quiet; then
+            echo "状态无变化，跳过提交"
+            exit 0
+          fi
+          git commit -m "chore: 记录 build-${{ github.run_number }} 的上游版本"
+          git pull --rebase --autostash origin main || true
+          git push origin HEAD:main \
+            || echo "::warning::状态文件推送失败，下轮定时任务会重复编译一次（无害）"

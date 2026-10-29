@@ -123,6 +123,43 @@ uci commit firewall
 /etc/init.d/firewall restart
 ```
 
+## 升级
+
+### 在线升级（保留配置）
+
+Release 除了带版本号的长文件名，还固定附一份 `sysupgrade.bin` / `factory.bin`，所以 `releases/latest/download/` 永远指向最新版，不用去翻页面找文件名。SSH 两条命令：
+
+```bash
+wget -O /tmp/fw.bin https://github.com/Living877/kwrt-ax1800/releases/latest/download/sysupgrade.bin
+sysupgrade /tmp/fw.bin          # 保留配置；加 -n 则清空配置
+```
+
+也可以走界面：**系统 → 备份/刷写固件**，上传 `sysupgrade.bin`，勾「保留配置」。
+
+⚠️ **别装 `owut` / `luci-app-attendedsysupgrade`**。ASU 服务器用它自己的 imagebuilder 按包列表重建，我们的源码级定制（q6 85 MiB、NSS 内核模块、banner、品牌串、首启脚本、页脚覆盖）**全部会丢**；而且 `kmod-qca-nss-ecm`、`kmod-ath11k-ahb` 官方源里没有，构建大概率直接失败。这包在这个固件上是陷阱，故意没装。
+
+刷新版时**保留配置**意味着首启脚本不再执行（`/etc/config/wireless` 已存在），SSID/密码/IPv6 设置原样延续。想让新的 `WIFI_KEY` 生效，得 `sysupgrade -n` 清一次配置。
+
+### 自动跟上游
+
+上游源码全部 `--depth 1` 现拉、不 pin 版本，**手动点 Run workflow 拿到的永远是当天最新**，不存在落后。
+
+另有定时任务：每周一 02:00（北京时间）自动跑一次，先探测 5 个上游源的 HEAD：
+
+| 源 | 分支 | 决定什么 |
+|---|---|---|
+| `openwrt/openwrt` | `openwrt-25.12` | 主树 |
+| `immortalwrt/immortalwrt` | `openwrt-25.12` | openssl / ppp / 5 个内核与 nftables 补丁 |
+| `LiBwrt/openwrt-6.x` | `25.12-nss` | NSS 目标树、ath11k、mac80211（最关键） |
+| `LiBwrt/LibWrt` | `25.12-nss` | image-commands.mk / Config-ipq.in / Config.in |
+| `kiddin9/op-packages` | `main` | argon / openclash / turboacc 等插件 |
+
+跟上一次成功构建的记录（`.build-state`）比对，**完全一致就跳过**，有变化才编。编译失败不发 Release，保留上一个可用版本，不会出现「自动编坏了还推给你」。
+
+`coolsnowwolf/lede`（hack-6.12）、`qosmio/sqm-scripts-nss`、`laipeng668/nss-packages` 不参与判定 —— 影响面窄，且 lede master 每天多次提交，纳入会让「有变化」永远成立。
+
+> GitHub 的政策：仓库连续 **60 天无活动**会自动禁用定时任务。届时手动点一次 Run workflow 即可唤醒。
+
 ## 文档
 
 | 文件 | 内容 |
