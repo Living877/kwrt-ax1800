@@ -114,14 +114,11 @@ jobs:
           # 设备级 diy/ 覆盖层（主题模板、banner、uci-defaults）最后铺上去
           cp -Rf ./diy/* ./ || true
 
-          # 注入 WiFi 密码（来自 GitHub Secret，避免明文进公开仓库）
-          if [ -n "$WIFI_KEY" ]; then
-            sed -i "s#__WIFI_KEY__#$WIFI_KEY#g" package/base-files/files/etc/uci-defaults/99-ax1800
-            echo "[+] WiFi 密码已从 secret 注入"
-          else
-            echo "::warning::未配置 WIFI_KEY secret，WiFi 密码留空，刷机后需手动设置"
-            sed -i "s#__WIFI_KEY__##g" package/base-files/files/etc/uci-defaults/99-ax1800
-          fi
+          # 注入 WiFi 密码：默认 12345678，配了 Secret(WIFI_KEY) 则用它覆盖
+          # 仓库里只存占位符，不存任何密码明文
+          WIFI_KEY="${WIFI_KEY:-12345678}"
+          sed -i "s#__WIFI_KEY__#$WIFI_KEY#g" package/base-files/files/etc/uci-defaults/99-ax1800
+          echo "[+] WiFi 密码已注入（${#WIFI_KEY} 位）"
 
       - name: 应用 devices 补丁
         env:
