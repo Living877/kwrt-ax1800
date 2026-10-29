@@ -214,13 +214,13 @@ jobs:
             echo "[i] $TAG 已存在，改为覆盖上传"
             verb=upload
             set -- gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-                   *jdcloud_re-ss-01* sysupgrade.bin factory.bin
+                   *jdcloud_re-ss-01* sysupgrade.bin factory.bin md5sums.txt
           else
             verb=create
             set -- gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
                    --title "AX1800 Pro · $TAG" \
                    --notes-file "$GITHUB_WORKSPACE/release.md" \
-                   *jdcloud_re-ss-01* sysupgrade.bin factory.bin
+                   *jdcloud_re-ss-01* sysupgrade.bin factory.bin md5sums.txt
           fi
 
           if "$@" 2>"$GITHUB_WORKSPACE/gh_err.txt"; then

@@ -456,7 +456,7 @@ jobs:
           echo "======== gh 身份 ========"
           gh auth status 2>&1 | sed -n '1,6p' || true
           echo "======== 即将上传 ========"
-          ls -lh *jdcloud_re-ss-01* sysupgrade.bin factory.bin
+          ls -lh *jdcloud_re-ss-01* sysupgrade.bin factory.bin md5sums.txt
 
           # 幂等：同一个 run 重跑时 tag 已经存在，create 会直接失败。
           # 所以先探测，存在就 upload --clobber，不存在才 create。
@@ -479,13 +479,13 @@ jobs:
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "[i] $TAG 已存在，改为覆盖上传"
             gh_do gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-              *jdcloud_re-ss-01* sysupgrade.bin factory.bin || exit 1
+              *jdcloud_re-ss-01* sysupgrade.bin factory.bin md5sums.txt || exit 1
             echo "[+] 产物已更新：$TAG"
           else
             gh_do gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
               --title "AX1800 Pro · build ${GITHUB_RUN_NUMBER}" \
               --notes-file release.md \
-              *jdcloud_re-ss-01* sysupgrade.bin factory.bin || exit 1
+              *jdcloud_re-ss-01* sysupgrade.bin factory.bin md5sums.txt || exit 1
             echo "[+] Release 已发布：$TAG"
           fi
 
