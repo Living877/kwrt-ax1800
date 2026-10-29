@@ -68,13 +68,19 @@ jobs:
       - name: 校验镜像
         run: |
           echo "======== 下载到的文件 ========"
-          ls -lh dl
+          find dl -type f | head -40
           echo
-          f=$(ls dl/*jdcloud_re-ss-01-squashfs-factory.bin 2>/dev/null | head -1 || true)
+          # upload-artifact 对多路径 glob 会保留「最小公共祖先」目录结构：
+          # 上传的是 openwrt/bin/... 和 openwrt/.config 两条，公共祖先是 openwrt/，
+          # 所以解出来是 dl/bin/targets/... 而不是 dl/*.bin，必须用 find 找
+          f=$(find dl -name '*jdcloud_re-ss-01-squashfs-factory.bin' | head -1 || true)
           if [ -z "$f" ]; then
-            echo "::error::产物里没有 factory.bin，run ${{ inputs.run_id }} 的 artifact 不完整"
+            echo "::error::产物里没有 factory.bin，run ${{ inputs.run_id }} 的 artifact 不完整（文件清单见上）"
             exit 1
           fi
+          IMGDIR=$(dirname "$f")
+          echo "IMGDIR=$IMGDIR" >> "$GITHUB_ENV"
+          echo "镜像目录：$IMGDIR"
           magic=$(od -An -tx1 -N4 "$f" | tr -d ' \n')
           if [ "$magic" != "d00dfeed" ]; then
             echo "::error::factory.bin 头不是 FIT（$magic）"
@@ -103,7 +109,8 @@ jobs:
         run: |
           # 不用 set -e：gh 失败时要自己抓 stderr 再决定怎么报
           set -uo pipefail
-          cd dl
+          [ -n "${IMGDIR:-}" ] || { echo "::error::IMGDIR 为空，上一步没定位到镜像目录"; exit 1; }
+          cd "$IMGDIR" || { echo "::error::进不去镜像目录 $IMGDIR"; exit 1; }
 
           f=$(ls *jdcloud_re-ss-01-squashfs-factory.bin | head -1)
           up=$(ls *jdcloud_re-ss-01-squashfs-sysupgrade.bin 2>/dev/null | head -1 || true)
@@ -115,7 +122,7 @@ jobs:
           cp -f "$f"  factory.bin
           md5sum *jdcloud_re-ss-01* sysupgrade.bin factory.bin > md5sums.txt
 
-          cat > ../release.md <<EOF
+          cat > "$GITHUB_WORKSPACE/release.md" <<EOF
           京东云亚瑟 AX1800 Pro（IPQ6000 / jdcloud_re-ss-01）· Kwrt 自编
 
           | 项 | 值 |
@@ -148,17 +155,17 @@ jobs:
           if gh release create "$TAG" \
                --repo "$GITHUB_REPOSITORY" \
                --title "AX1800 Pro · $TAG" \
-               --notes-file ../release.md \
-               *jdcloud_re-ss-01* sysupgrade.bin factory.bin 2>../gh_err.txt; then
+               --notes-file "$GITHUB_WORKSPACE/release.md" \
+               *jdcloud_re-ss-01* sysupgrade.bin factory.bin 2>"$GITHUB_WORKSPACE/gh_err.txt"; then
             echo "发布成功：$TAG"
             gh release view "$TAG" --json url,assets --jq '.url, (.assets[] | "  " + .name + "  " + (.size|tostring) + " bytes")'
           else
             rc=$?
             echo "-------- gh stderr --------"
-            cat ../gh_err.txt
+            cat "$GITHUB_WORKSPACE/gh_err.txt"
             echo "--------------------------"
             # 把真实报错塞进注解，这样没日志权限也能看到
-            msg=$(tr '\n' ' ' < ../gh_err.txt | head -c 800)
+            msg=$(tr '\n' ' ' < "$GITHUB_WORKSPACE/gh_err.txt" | head -c 800)
             echo "::error::gh release create 失败（退出码 $rc）：$msg"
             exit 1
           fi
