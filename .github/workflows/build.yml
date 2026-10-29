@@ -22,8 +22,16 @@ on:
         type: boolean
         default: false
   schedule:
-    # 每周一 02:00（北京时间）= 每周日 18:00 UTC
-    - cron: '0 18 * * 0'
+    # 每天 03:00（北京时间）= 前一天 19:00 UTC
+    # 只跑得很轻：probe 先比对 .build-state，上游没变就直接跳过（约 1 分钟），
+    # 变了才进 5 小时的编译。这样「上游一更新，最多隔一天就有新固件」。
+    - cron: '0 19 * * *'
+
+# 同一时刻只允许一个构建。手动触发撞上定时任务时排队，而不是两个 5 小时的 job
+# 并行跑完再一起去推 .build-state（推失败的后果是下轮重复编译一次）。
+concurrency:
+  group: build
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -411,6 +419,23 @@ jobs:
             echo "| 默认 | 192.168.1.1 · 主机名 OpenWrt · SSID CLI |"
             echo "| 上游 | openwrt-25.12 \`$OW_SHORT\` · LibWrt NSS \`$LT_SHORT\` |"
             echo
+            # A5：把 .manifest 里的核心组件版本写进 Release 说明。
+            # 以后排查「这版到底是哪个版本的 dnsmasq / wpad」不用先去下 50MB 的包。
+            man=$(ls *jdcloud_re-ss-01.manifest 2>/dev/null | head -1 || true)
+            if [ -n "$man" ]; then
+              echo "## 核心组件"
+              echo
+              echo "| 包 | 版本 |"
+              echo "|---|---|"
+              for p in luci-app-store luci-theme-argon luci-app-openclash luci-app-turboacc \
+                       luci-app-argon-config dnsmasq-full wpad-mbedtls kmod-qca-nss-ecm \
+                       sqm-scripts-nss luci-proto-wireguard; do
+                v=$(awk -v p="$p" '$1==p{print $3; exit}' "$man")
+                # 注意不能写 [ -n "$v" ] && echo：set -e 下循环体最后一条命令失败会直接退出
+                if [ -n "$v" ]; then echo "| $p | $v |"; fi
+              done
+              echo
+            fi
             echo "## 首次刷机"
             echo
             echo "U-Boot 网页 \`/uimage.html\` 上传 \`*-squashfs-factory.bin\`（或 \`factory.bin\`），"
@@ -433,20 +458,35 @@ jobs:
           echo "======== 即将上传 ========"
           ls -lh *jdcloud_re-ss-01* sysupgrade.bin factory.bin
 
-          if gh release create "build-${GITHUB_RUN_NUMBER}" \
-               --repo "$GITHUB_REPOSITORY" \
-               --title "AX1800 Pro · build ${GITHUB_RUN_NUMBER}" \
-               --notes-file release.md \
-               *jdcloud_re-ss-01* sysupgrade.bin factory.bin 2>"$RUNNER_TEMP/gh_err.txt"; then
-            echo "[+] Release 已发布"
+          # 幂等：同一个 run 重跑时 tag 已经存在，create 会直接失败。
+          # 所以先探测，存在就 upload --clobber，不存在才 create。
+          gh_do() {
+            if "$@" 2>"$RUNNER_TEMP/gh_err.txt"; then
+              return 0
+            else
+              local rc=$?
+              echo "-------- gh stderr --------"
+              cat "$RUNNER_TEMP/gh_err.txt"
+              echo "--------------------------"
+              local msg
+              msg=$(tr '\n' ' ' < "$RUNNER_TEMP/gh_err.txt" | head -c 800)
+              echo "::error::gh 调用失败（退出码 $rc）：$msg"
+              return "$rc"
+            fi
+          }
+
+          TAG="build-${GITHUB_RUN_NUMBER}"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "[i] $TAG 已存在，改为覆盖上传"
+            gh_do gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+              *jdcloud_re-ss-01* sysupgrade.bin factory.bin || exit 1
+            echo "[+] 产物已更新：$TAG"
           else
-            rc=$?
-            echo "-------- gh stderr --------"
-            cat "$RUNNER_TEMP/gh_err.txt"
-            echo "--------------------------"
-            msg=$(tr '\n' ' ' < "$RUNNER_TEMP/gh_err.txt" | head -c 800)
-            echo "::error::gh release create 失败（退出码 $rc）：$msg"
-            exit 1
+            gh_do gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "AX1800 Pro · build ${GITHUB_RUN_NUMBER}" \
+              --notes-file release.md \
+              *jdcloud_re-ss-01* sysupgrade.bin factory.bin || exit 1
+            echo "[+] Release 已发布：$TAG"
           fi
 
   record:

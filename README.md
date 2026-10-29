@@ -144,7 +144,7 @@ sysupgrade /tmp/fw.bin          # 保留配置；加 -n 则清空配置
 
 上游源码全部 `--depth 1` 现拉、不 pin 版本，**手动点 Run workflow 拿到的永远是当天最新**，不存在落后。
 
-另有定时任务：每周一 02:00（北京时间）自动跑一次，先探测 5 个上游源的 HEAD：
+另有定时任务：**每天 03:00（北京时间）**自动跑一次。上游没变时只花一分钟（探测完就跳过），变了才进 5 小时的编译 —— 所以「上游一更新，最多隔一天就有新固件」。先探测 5 个上游源的 HEAD：
 
 | 源 | 分支 | 决定什么 |
 |---|---|---|
@@ -155,6 +155,8 @@ sysupgrade /tmp/fw.bin          # 保留配置；加 -n 则清空配置
 | `kiddin9/op-packages` | `main` | argon / openclash / turboacc 等插件 |
 
 跟上一次成功构建的记录（`.build-state`）比对，**完全一致就跳过**，有变化才编。编译失败不发 Release，保留上一个可用版本，不会出现「自动编坏了还推给你」。
+
+编译成功但卡在最后「发布 Release」这一步时，`publish.yml` 会通过 `workflow_run` **自动从 artifact 补发一次**（30 秒，不用重编 5 小时）；补发也失败时会把 `gh` 的原始报错写成注解，`Actions → 发布已有产物` 里能直接看到原因。
 
 `coolsnowwolf/lede`（hack-6.12）、`qosmio/sqm-scripts-nss`、`laipeng668/nss-packages` 不参与判定 —— 影响面窄，且 lede master 每天多次提交，纳入会让「有变化」永远成立。
 

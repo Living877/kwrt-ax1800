@@ -5,18 +5,26 @@ name: 发布已有产物
 # 用途：编译 5 小时成功、但「发布 Release」那步挂了的时候，
 #      不需要重编一遍，跑这个 30 秒就能补上。
 #
+# 两种触发：
+#   1) workflow_run —— 「Build Kwrt · AX1800 Pro」失败时自动重试发布。
+#      仅当那次 run 真的有产物时才动手（编译阶段就挂了就跳过，不留红叉）。
+#   2) workflow_dispatch —— 手动指定 run id；留空 = 最近一次构建。
+#
 # 关键设计：失败信息用 ::error:: 注解输出。
 #   Actions 的日志下载接口对未认证请求是 403，但 check annotation 是公开可读的，
 #   把 stderr 塞进注解，就能在没有日志权限的情况下定位真实原因。
 
 on:
+  workflow_run:
+    workflows: ["Build Kwrt · AX1800 Pro"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       run_id:
-        description: '源构建的 run id（默认是 build #11）'
+        description: '源构建的 run id，留空 = 最近一次构建'
         type: string
-        required: true
-        default: '40824419004'
+        required: false
+        default: ''
       tag:
         description: 'Release tag，留空 = build-<源 run 的 run_number>'
         type: string
@@ -25,6 +33,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 env:
   TZ: Asia/Shanghai
@@ -33,6 +42,9 @@ jobs:
   publish:
     runs-on: ubuntu-22.04
     timeout-minutes: 20
+    # 自动触发只在「构建失败」时补发布（成功的话 build.yml 自己已经发过了）；
+    # 手动触发无条件跑。
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'failure'
 
     steps:
       - name: 检出工程
@@ -44,8 +56,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          RUN_ID="${{ inputs.run_id }}"
-          info=$(gh api "repos/${{ github.repository }}/actions/runs/$RUN_ID")
+          # run id 的三种来源，优先级从高到低：
+          #   1) workflow_run 自动触发 → 事件里的那个 run（用 jq 读 event 文件，
+          #      不用 ${{ }} 拼字符串，避免事件字段缺失时拼出空串）
+          #   2) 手动触发且填了 run_id
+          #   3) 手动触发但留空 → 取最近一次 build run
+          RUN_ID=""
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ]; then
+            RUN_ID=$(jq -r '.workflow_run.id // empty' "$GITHUB_EVENT_PATH")
+          else
+            RUN_ID="${{ inputs.run_id }}"
+          fi
+          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+            RUN_ID=$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/build.yml/runs?per_page=1" \
+                       --jq '.workflow_runs[0].id')
+            echo "[i] 未指定 run id，取最近一次构建：$RUN_ID"
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          info=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID")
           num=$(printf '%s' "$info" | jq -r .run_number)
           sha=$(printf '%s' "$info" | jq -r .head_sha)
           concl=$(printf '%s' "$info" | jq -r .conclusion)
@@ -56,16 +84,43 @@ jobs:
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "源 run #$num  状态=$concl  提交=$sha  ->  Release tag: $tag"
 
+      - name: 判断源 run 有没有可发布产物
+        id: probe_art
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          RUN_ID="${{ steps.meta.outputs.run_id }}"
+          n=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/$RUN_ID/artifacts" \
+                --jq '[.artifacts[] | select(.expired == false)] | length' 2>/dev/null || true)
+          case "$n" in ''|*[!0-9]*) n=0 ;; esac
+          echo "源 run $RUN_ID 未过期产物数：$n"
+          if [ "$n" -gt 0 ]; then
+            echo "skip=0" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_run" ]; then
+            # 编译阶段就失败了，压根没有产物 —— 这不是发布的问题。
+            # 直接成功退出，免得每次编译失败都在这里多一个红叉。
+            echo "::notice::源 run 没有产物（编译阶段失败），自动补发布跳过"
+            echo "skip=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::手动指定的 run $RUN_ID 没有未过期产物，检查 run id 是否正确"
+            exit 1
+          fi
+
       - name: 下载该 run 的产物
+        if: steps.probe_art.outputs.skip != '1'
         uses: actions/download-artifact@v4
         with:
           pattern: kwrt-ax1800-*
           merge-multiple: true
           path: dl
-          run-id: ${{ inputs.run_id }}
+          run-id: ${{ steps.meta.outputs.run_id }}
           github-token: ${{ github.token }}
 
       - name: 校验镜像
+        if: steps.probe_art.outputs.skip != '1'
         run: |
           echo "======== 下载到的文件 ========"
           find dl -type f | head -40
@@ -75,7 +130,7 @@ jobs:
           # 所以解出来是 dl/bin/targets/... 而不是 dl/*.bin，必须用 find 找
           f=$(find dl -name '*jdcloud_re-ss-01-squashfs-factory.bin' | head -1 || true)
           if [ -z "$f" ]; then
-            echo "::error::产物里没有 factory.bin，run ${{ inputs.run_id }} 的 artifact 不完整（文件清单见上）"
+            echo "::error::产物里没有 factory.bin，run ${{ steps.meta.outputs.run_id }} 的 artifact 不完整（文件清单见上）"
             exit 1
           fi
           IMGDIR=$(dirname "$f")
@@ -100,6 +155,7 @@ jobs:
           echo "fit=$fit" >> "$GITHUB_ENV"
 
       - name: 建 Release
+        if: steps.probe_art.outputs.skip != '1'
         env:
           GH_TOKEN: ${{ github.token }}
           # gh 按 CWD 的 .git 猜仓库，显式钉死，避免以后 CWD 变动又认错
@@ -152,13 +208,25 @@ jobs:
           gh auth status 2>&1 | sed -n '1,6p' || true
           echo
 
-          if gh release create "$TAG" \
-               --repo "$GITHUB_REPOSITORY" \
-               --title "AX1800 Pro · $TAG" \
-               --notes-file "$GITHUB_WORKSPACE/release.md" \
-               *jdcloud_re-ss-01* sysupgrade.bin factory.bin 2>"$GITHUB_WORKSPACE/gh_err.txt"; then
-            echo "发布成功：$TAG"
-            gh release view "$TAG" --json url,assets --jq '.url, (.assets[] | "  " + .name + "  " + (.size|tostring) + " bytes")'
+          # 幂等：tag 已存在（比如同一个 run 重跑、或 build.yml 已经发过）时
+          # create 会失败，改成覆盖上传。自动补发布要靠这条路才可靠。
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "[i] $TAG 已存在，改为覆盖上传"
+            verb=upload
+            set -- gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+                   *jdcloud_re-ss-01* sysupgrade.bin factory.bin
+          else
+            verb=create
+            set -- gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+                   --title "AX1800 Pro · $TAG" \
+                   --notes-file "$GITHUB_WORKSPACE/release.md" \
+                   *jdcloud_re-ss-01* sysupgrade.bin factory.bin
+          fi
+
+          if "$@" 2>"$GITHUB_WORKSPACE/gh_err.txt"; then
+            echo "发布成功：$TAG（$verb）"
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --json url,assets --jq '.url, (.assets[] | "  " + .name + "  " + (.size|tostring) + " bytes")'
           else
             rc=$?
             echo "-------- gh stderr --------"
@@ -166,6 +234,6 @@ jobs:
             echo "--------------------------"
             # 把真实报错塞进注解，这样没日志权限也能看到
             msg=$(tr '\n' ' ' < "$GITHUB_WORKSPACE/gh_err.txt" | head -c 800)
-            echo "::error::gh release create 失败（退出码 $rc）：$msg"
+            echo "::error::gh release $verb 失败（退出码 $rc）：$msg"
             exit 1
           fi
