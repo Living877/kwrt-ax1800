@@ -377,7 +377,17 @@ jobs:
           # 额外附一份固定文件名的镜像。
           # 这样 releases/latest/download/sysupgrade.bin 永远指向最新版，
           # 升级不用再去翻 Release 页面找带版本号的长文件名。
-          cp -f "$(ls *jdcloud_re-ss-01-squashfs-sysupgrade.bin | head -1)" sysupgrade.bin
+          # 先确认 sysupgrade 真的存在再 cp。原来写的是
+          #   cp -f "$(ls *...sysupgrade.bin | head -1)" sysupgrade.bin
+          # 一旦这个文件不存在，ls 报错、$( ) 为空、cp 报 "cannot stat ''"，
+          # 整步 3 秒退出且什么线索都不留（build #11 就是这个时间特征）
+          up=$(ls *jdcloud_re-ss-01-squashfs-sysupgrade.bin 2>/dev/null | head -1 || true)
+          if [ -z "$up" ]; then
+            echo "::error::产物目录里没有 sysupgrade.bin，实际内容见下"
+            ls -1
+            exit 1
+          fi
+          cp -f "$up" sysupgrade.bin
           cp -f "$f" factory.bin
 
           md5sum *jdcloud_re-ss-01* > md5sums.txt
@@ -407,10 +417,28 @@ jobs:
             echo
             echo "也可以 LuCI → 系统 → 备份/刷写固件 → 上传 \`sysupgrade.bin\` 并勾选「保留配置」。"
           } > release.md
-          gh release create "build-${GITHUB_RUN_NUMBER}" \
-            --title "AX1800 Pro · build ${GITHUB_RUN_NUMBER}" \
-            --notes-file release.md \
-            *jdcloud_re-ss-01* sysupgrade.bin factory.bin
+          # 发布失败时把 gh 的真实 stderr 塞进 ::error:: 注解。
+          # Actions 的日志下载接口要认证（未认证 403），但 check annotation 是
+          # 公开可读的 —— 没有日志权限也能定位失败原因。
+          echo "======== gh 身份 ========"
+          gh auth status 2>&1 | sed -n '1,6p' || true
+          echo "======== 即将上传 ========"
+          ls -lh *jdcloud_re-ss-01* sysupgrade.bin factory.bin
+
+          if gh release create "build-${GITHUB_RUN_NUMBER}" \
+               --title "AX1800 Pro · build ${GITHUB_RUN_NUMBER}" \
+               --notes-file release.md \
+               *jdcloud_re-ss-01* sysupgrade.bin factory.bin 2>"$RUNNER_TEMP/gh_err.txt"; then
+            echo "[+] Release 已发布"
+          else
+            rc=$?
+            echo "-------- gh stderr --------"
+            cat "$RUNNER_TEMP/gh_err.txt"
+            echo "--------------------------"
+            msg=$(tr '\n' ' ' < "$RUNNER_TEMP/gh_err.txt" | head -c 800)
+            echo "::error::gh release create 失败（退出码 $rc）：$msg"
+            exit 1
+          fi
 
   record:
     # 只有编译成功才记录上游版本。失败时保留旧记录，下一轮定时任务会重试同一个上游版本。
