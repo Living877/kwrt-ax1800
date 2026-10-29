@@ -30,8 +30,8 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项。官方镜像
 |---|---|
 | 代理 | OpenClash 0.48.x（含 `dnsmasq-full` 四子项 / `ruby` / `kmod-tun` / `kmod-nft-tproxy` 全套依赖） |
 | VPN | WireGuard（`kmod-wireguard` + `wireguard-tools` + `luci-proto-wireguard` + `luci-lib-uqr`），内核侧是模块，不占 6 MiB |
-| 网络 | `sqm-scripts-nss` + `luci-app-sqm`、`upnp`、`ddns`、`wol`、`watchcat`、`frpc`、`zerotier`、`turboacc`（锁 NSS ECM 模式） |
-| 存储 | `samba4`、`diskman`、`automount`、`cifs-mount`、`block-mount`、`e2fsprogs`、`parted`、`fdisk` |
+| 网络 | `sqm-scripts-nss` + `luci-app-sqm`、`upnp`、`ddns`、`wol`、`watchcat`、`frpc`、`turboacc`（锁 NSS ECM 模式） |
+| 存储 | `samba4`（U 盘共享给局域网）、`diskman`、`automount`、`block-mount`、`e2fsprogs`、`parted`、`fdisk` |
 | 工具 | `ttyd`、`quickfile`、`timedreboot`、`htop`、`nano`、`iperf3`、`iStore`、`zram-swap` |
 
 **明确不编**：Docker 全家（1G 跑不动）、`luci-app-istorerouter`、`luci-app-advancedplus`、`luci-app-footstrap-files`。
@@ -90,7 +90,7 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项。官方镜像
 
 **三道校验**（都是踩坑后加的）：
 
-- 编译前：**18 个**关键包（argon / openclash / dnsmasq-full / kmod-tun / kmod-nft-tproxy / kmod-qca-nss-ecm / kmod-ath11k-ahb / wpad-mbedtls / turboacc / store / mount-utils / kmod-wireguard …）缺任一 → 直接失败，不白等 1.5 小时
+- 编译前：**17 个**关键包（argon / openclash / dnsmasq-full / kmod-tun / kmod-nft-tproxy / kmod-qca-nss-ecm / kmod-ath11k-ahb / wpad-mbedtls / turboacc / store / mount-utils / kmod-wireguard …）缺任一 → 直接失败，不白等 1.5 小时
 - 编译后：从成品 `factory.bin` 的 FIT 头读真实内核体积（`od -j4`），超 6 MiB 判失败。**FIT 是镜像阶段才生成的，预编阶段测不到 `itb`**
 - 编译后：扫 manifest 复核推广包未混入
 

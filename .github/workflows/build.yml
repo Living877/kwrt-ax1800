@@ -159,7 +159,7 @@ jobs:
           for p in luci-theme-argon luci-app-openclash dnsmasq-full kmod-tun kmod-nft-tproxy \
                    kmod-qca-nss-ecm kmod-ath11k-ahb wpad-mbedtls \
                    luci-app-timedreboot automount luci-app-quickfile \
-                   luci-app-cifs-mount luci-app-turboacc luci-app-store mount-utils \
+                   luci-app-turboacc luci-app-store mount-utils \
                    kmod-wireguard wireguard-tools luci-proto-wireguard; do
             if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
               echo "::error::关键包 $p 没进 .config"
