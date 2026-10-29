@@ -72,12 +72,14 @@ if [ -f include/target.mk ]; then
   done
 fi
 
-# ---- 4.1 去掉作者署名（os-release / openwrt_release 里的 " by Kiddin'"）----
+# ---- 4.1 去掉作者署名（/etc/os-release 的 OPENWRT_RELEASE 字段）----
 # 上游 common/diy.sh: sed "s#%C\"#%C by Kiddin'\"#" package/base-files/files/etc/os-release
-# banner 里的 %C 会展开成 DISTRIB_DESCRIPTION，不清理掉的话开机提示照样带作者名。
-for f in package/base-files/files/etc/os-release package/base-files/files/etc/openwrt_release; do
+# 注意 /etc/os-release 是符号链接 -> ../usr/lib/os-release，sed -i 默认会把链接替换成
+# 普通文件，这里用 --follow-symlinks 保形。
+# banner 里的 %C 是 VERSION_CODE（构建日期），不含作者名，与这里无关。
+for f in package/base-files/files/usr/lib/os-release package/base-files/files/etc/openwrt_release; do
   [ -f "$f" ] || continue
-  sed -i "s/ by Kiddin'//g; s/ by Kiddin//g" "$f"
+  sed --follow-symlinks -i "s/ by Kiddin'//g; s/ by Kiddin//g" "$f"
   if grep -q 'Kiddin' "$f"; then die "作者署名没清干净（$f）"; fi
   echo "[+] 已清理作者署名 -> $f"
 done
