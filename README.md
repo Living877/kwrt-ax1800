@@ -92,11 +92,16 @@ Kwrt 的 `feeds/kiddin9/luci-mod-status` 和上游差得比想象多：`index.js
 
 ### 4. 首次开机自动配置（`diy/.../uci-defaults/99-ax1800`）
 
-利用 `/etc/init.d/boot` 的执行顺序（`wifi config` → kmodloader → uci-defaults），在脚本里一次性配完：
+首启时一次性配完：
 
 - **IPv6**：`lan.ip6assign=60`、`dhcp.lan` 的 `dhcpv6/ra=server`、`ra_flags=managed+other`
 - **WiFi 双频合一**：所有 `wifi-iface` 统一 SSID/密码/`psk2`，11k + 11v 开（`ieee80211k` + `bss_transition` + `wnm_sleep_mode`），**11r 关**
 - **带宽**：2.4G `HT40`，5G `HE80`（160MHz 在 IPQ6000 上干扰下反而掉速）
+- **WiFi 校准（cal）**：开机早期从本机 eMMC 的 `0:ART` 分区（`mmcblk0p15`，偏移 `0x1000`）切出 64 KiB。每台机器的校准数据不同，**不进仓库、不进镜像**
+
+⚠️ **首次开机无线要等 2~3 分钟**：ath11k 注册 phy 要约 80 秒，而开机几秒就跑完 `wifi config`，
+所以首启脚本对无线走快/慢双路径——phy 没好就后台等（最长 180 秒）再补配置并 `wifi reload`。
+在这之前看 `iw dev` 是空的、LuCI 没有无线，都是正常的。排查看 `logread | grep ax1800-wifi`。
 
 ### 4.1 安全默认值（覆盖 Kwrt 的 `my-default-settings`）
 
@@ -144,7 +149,17 @@ Kwrt 的 `99-default-settings` 会在首启时写一批"方便推广机"的设�
 
 刷完第一件事：**网络 → 接口 → WAN → 协议改 PPPoE**，填宽带账号。光猫桥接下 DHCP 拿不到地址，这一步不做就上不了网。拨通后 IPv6 会自动起来。
 
-验证：
+验证（**开机满 2~3 分钟后**再跑）：
+
+```bash
+uclient-fetch -O - https://raw.githubusercontent.com/Living877/kwrt-ax1800/main/scripts/self-check.sh | sh
+```
+
+结尾打印 `通过 X / 异常 Y`，覆盖机型/密码/DNS 安全三项/BBR/NSS/无线/存储/菜单/监听/时间。
+WAN 未通拉不下来时，从电脑 `scp scripts/self-check.sh root@192.168.1.1:/tmp/` 再执行；
+**不要整段粘贴脚本**（多行 `if/else` 经终端折行后判定会坏）。
+
+手工抽查：
 
 ```bash
 cat /proc/device-tree/model              # JDCloud RE-SS-01
@@ -154,6 +169,10 @@ uci get wireless.@wifi-iface[0].ssid     # CLI
 lsmod | grep qca_nss | wc -l             # 20+ 个 NSS 模块
 ip -6 addr show br-lan                   # 应有 240e:/2408: 公网地址
 ```
+
+> 内存显示约 878 MiB 而非 1 GiB 是正常的（Q6 保留区 85 MiB + TZ/NSS + 内核）。
+> eMMC 上 `p19`(5G) / `p20`(7.4G) 两块空闲分区**保持现状不合并**：rootfs 已 2 GB、仅用 5%，
+> 改 GPT 有变砖风险，不值得。风扇若是带物理开关的独立温控器（45℃ 开 / 40℃ 关），固件不负责它。
 
 跑 OpenClash 前建议关掉硬件卸载，否则部分流量不走代理：
 
@@ -210,6 +229,9 @@ sysupgrade /tmp/fw.bin          # 保留配置；加 -n 则清空配置
 |---|---|
 | [`docs/整体说明.md`](docs/整体说明.md) | 完整说明书：硬件前提 / 工程结构 / 定制清单 / 固件内容 / 编译流程 / 刷机 / 首启配置 / 已知风险 |
 | [`docs/优化审计.md`](docs/优化审计.md) | 对比 GitHub 上 4 个同机型工程，列出可补的 5 个 A 级优化与不建议做的 C 级 |
+| [`docs/固件验收清单.md`](docs/固件验收清单.md) | 刷完怎么验：首启即验 / 功能 / 性能 / 稳定性，标注哪些能一键、哪些必须人肉 |
+
+脚本：`scripts/self-check.sh`（固件一键自检）、`scripts/wifi-diag.sh`（无线专项排障）。
 
 ## 已知风险
 
