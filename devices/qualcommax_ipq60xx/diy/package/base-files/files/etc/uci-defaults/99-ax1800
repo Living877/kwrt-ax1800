@@ -1,5 +1,5 @@
 #!/bin/sh
-# 首次启动的一次性配置：默认主题 / IPv6 / PPPoE 拨号 / WiFi 双频合一
+# 首次启动的一次性配置：默认主题 / IPv6 / WAN 的 IPv6 客户端 / WiFi 双频合一
 #
 # 由 /etc/init.d/boot 的 uci_apply_defaults 用 `.` 引入执行，顺序是：
 #   wifi config（生成默认无线配置）→ kmodloader → uci-defaults → 各服务启动
@@ -26,22 +26,18 @@ uci -q delete dhcp.lan.ra_flags
 uci -q add_list dhcp.lan.ra_flags='managed-config'
 uci -q add_list dhcp.lan.ra_flags='other-config'
 
-# ============ 3. WAN：PPPoE 拨号 ============
-# 账号密码留空，刷完在「网络 → 接口 → WAN」里填；ipv6=1 让 PPP 协商 IPv6CP，
-# netifd 会自动拉起 wan6（DHCPv6 客户端，拿地址 + PD）。
-PPPOE_USER=''
-PPPOE_PASS=''
-uci -q set network.wan.proto='pppoe'
-uci -q set network.wan.username="$PPPOE_USER"
-uci -q set network.wan.password="$PPPOE_PASS"
-uci -q set network.wan.ipv6='1'
-uci -q set network.wan.keepalive='10 5'
-uci -q delete network.wan6
-uci -q set network.wan6='interface'
-uci -q set network.wan6.device='@wan'
-uci -q set network.wan6.proto='dhcpv6'
-uci -q set network.wan6.reqaddress='try'
-uci -q set network.wan6.reqprefix='auto'
+# ============ 3. WAN：保持 DHCP，只兜底 IPv6 客户端 ============
+# config_generate 已按 dhcp 建好 wan + wan6，这里只在 wan6 缺失时补一个，
+# device 用 @wan 跟随逻辑接口，将来改成 pppoe 也不用再动。
+# 哪天要拨号：LuCI → 网络 → 接口 → WAN → 协议改 PPPoE 填账号即可，
+# 记得把「IPv6 分配长度」留空、IPv6 保持 auto，IPv6CP 会自动协商。
+if ! uci -q get network.wan6 >/dev/null 2>&1; then
+	uci -q set network.wan6='interface'
+	uci -q set network.wan6.device='@wan'
+	uci -q set network.wan6.proto='dhcpv6'
+	uci -q set network.wan6.reqaddress='try'
+	uci -q set network.wan6.reqprefix='auto'
+fi
 
 # ============ 4. WiFi 双频合一 ============
 # 每个 radio 的 iface 用同一组 SSID/密码，即 2.4G 与 5G 同名。
