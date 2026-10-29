@@ -328,6 +328,17 @@ jobs:
             exit (a>b)
           }' || { echo "::error::内核超过 6MiB，刷进去会溢出"; exit 1; }
 
+          # 6 MiB 处必须正好是 squashfs 起点（magic "hsqs" = 68 73 71 73）。
+          # 布局是 append-kernel | pad-to 6144k | append-rootfs，rootfs 紧跟内核之后；
+          # 若上游哪天改了 append 顺序或 pad 没生效，这里会直接报错，不会编出一个
+          # 刷进去 rootfs 挂载失败的固件。
+          sq=$(od -An -tx1 -j6291456 -N4 "$f" | tr -d ' \n')
+          if [ "$sq" != "68737173" ]; then
+            echo "::error::6MiB 处不是 hsqs（$sq），内核/rootfs 边界异常"
+            exit 1
+          fi
+          echo "[+] 6MiB 处 hsqs 校验通过"
+
       - name: 上传产物
         uses: actions/upload-artifact@v4
         with:

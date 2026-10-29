@@ -70,6 +70,7 @@ while uci -q get "wireless.@wifi-iface[$i]" >/dev/null 2>&1; do
 	uci -q set "wireless.@wifi-iface[$i].ieee80211k=1"
 	uci -q set "wireless.@wifi-iface[$i].bss_transition=1"
 	uci -q set "wireless.@wifi-iface[$i].wnm_sleep_mode=1"
+	uci -q set "wireless.@wifi-iface[$i].disassoc_low_ack=0"
 	uci -q set "wireless.@wifi-iface[$i].ieee80211r=0"
 	i=$((i + 1))
 done
