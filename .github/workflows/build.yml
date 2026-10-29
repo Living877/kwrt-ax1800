@@ -269,6 +269,17 @@ jobs:
           make defconfig
           echo "======== 关键项 ========"
           grep -E "^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_|^CONFIG_PACKAGE_(luci-theme-argon|luci-app-openclash|dnsmasq-full|kmod-tun|kmod-nft-tproxy|kmod-qca-nss-ecm|kmod-ath11k-ahb|wpad-mbedtls|sqm-scripts-nss)=" .config
+          echo "======== iStore 诊断 ========"
+          echo "--- 架构符号 ---"
+          grep -E "^CONFIG_aarch64=|^CONFIG_x86_64=|^CONFIG_TARGET_qualcommax=" .config || echo "(架构符号一个都没匹配到)"
+          echo "--- .config 里 store/mount-utils 的原始行 ---"
+          grep -n "luci-app-store\|mount-utils" .config || echo "(config 里完全没有)"
+          echo "--- .config-package.in 里的定义 ---"
+          awk '/^config PACKAGE_luci-app-store$/,/^$/' tmp/.config-package.in || echo "(metadata 里没有该符号)"
+          echo "--- 包目录是否存在 ---"
+          ls -ld package/feeds/kiddin9/luci-app-store 2>&1
+          echo "--- Makefile 关键行 ---"
+          grep -nE "LUCI_DEPENDS|LUCI_EXTRA|LUCI_PKGARCH|PKG_VERSION" package/feeds/kiddin9/luci-app-store/Makefile 2>&1
           echo "======== 应被关闭的项（仅打印，真正的断言在下一步「编译前校验」）========"
           # 以前这里是纯 grep，指望着「匹配不到」；但 iStore 后来改成故意开启，
           # 这条就永远匹配成功、什么也没校验；哪天把它关掉，grep 返回 1 会让
