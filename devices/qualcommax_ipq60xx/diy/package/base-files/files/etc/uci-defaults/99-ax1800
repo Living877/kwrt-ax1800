@@ -28,6 +28,30 @@ uci -q delete dhcp.lan.ra_flags
 uci -q add_list dhcp.lan.ra_flags='managed-config'
 uci -q add_list dhcp.lan.ra_flags='other-config'
 
+# ============ 2.5 BBR：默认拥塞控制切 BBR ============
+# turboacc 已从上游移除，BBR 改走内核模块 kmod-tcp-bbr（DEFAULT_PACKAGES 已带）。
+# 内核编进了 bbr 但默认算法仍是 cubic，这里运行时切过去，并写进 sysctl.conf
+# 让 /etc/init.d/sysctl 每次开机都应用。
+if modprobe tcp_bbr 2>/dev/null || [ -d /sys/module/tcp_bbr ]; then
+	sysctl -w net.ipv4.tcp_congestion_control=bbr >/dev/null 2>&1
+	grep -q '^net.ipv4.tcp_congestion_control' /etc/sysctl.conf 2>/dev/null || \
+		echo 'net.ipv4.tcp_congestion_control=bbr' >> /etc/sysctl.conf
+fi
+
+# ============ 2.6 全锥 NAT（FullCone）============
+# turboacc 上游已删，但全锥不依赖它：firewall4 打上 fullcone 补丁后认
+# defaults.fullcone，底层是 kmod-nft-fullcone 注册的 nft fullcone 表达式。
+# fullcone=1 走 FULLCONENAT（UDP 打洞、BT/游戏联机、P2P 直连都靠它），
+# fullcone6 保持 0 —— IPv6 地址本来就端到端，多数场景不需要再 NAT 一层。
+# 模块缺失时不写这个开关，让 99-default-settings 那段探测保持"没模块就置 0"。
+if modprobe nft_fullcone 2>/dev/null; then
+	uci -q set firewall.@defaults[0].fullcone='1'
+	uci -q set firewall.@defaults[0].fullcone6='0'
+	uci -q commit firewall
+else
+	logger -t ax1800-net "nft_fullcone 模块缺失，全锥 NAT 未启用"
+fi
+
 # ============ 3. WAN：保持 DHCP，只兜底 IPv6 客户端 ============
 # config_generate 已按 dhcp 建好 wan + wan6，这里只在 wan6 缺失时补一个，
 # device 用 @wan 跟随逻辑接口，将来改成 pppoe 也不用再动。

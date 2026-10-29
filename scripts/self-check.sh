@@ -32,6 +32,14 @@ cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null)
 echo "$cc" | grep -q bbr
 if [ $? -eq 0 ]; then ok "拥塞控制 $cc"; else no "拥塞控制 ${cc:-无}(期望bbr)"; fi
 
+fc=$(uci -q get firewall.@defaults[0].fullcone)
+if [ "$fc" = "1" ]; then
+	nft list ruleset 2>/dev/null | grep -q 'fullcone'
+	if [ $? -eq 0 ]; then ok "全锥NAT已生效"; else no "全锥NAT开关=1但规则里没有(fw4未打补丁或模块缺失)"; fi
+else
+	no "全锥NAT未开(fullcone=${fc:-无})"
+fi
+
 lsmod | grep -q ecm
 if [ $? -eq 0 ]; then ok "NSS ECM已加载"; else no "NSS ECM未加载"; fi
 lsmod | grep -q qca_nss_drv

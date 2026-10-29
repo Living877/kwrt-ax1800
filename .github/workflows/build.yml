@@ -62,7 +62,7 @@ jobs:
           #   immortalwrt          openwrt-25.12  openssl / ppp + 5 个内核与 nftables 补丁
           #   LiBwrt/openwrt-6.x   25.12-nss      NSS 目标树、ath11k、mac80211（最关键）
           #   LiBwrt/LibWrt        25.12-nss      image-commands.mk / Config-ipq.in / Config.in
-          #   kiddin9/op-packages  main           argon / openclash / turboacc 等插件
+          #   kiddin9/op-packages  main           argon / openclash / fullconenat-nft 等插件
           # coolsnowwolf/lede（hack-6.12）、qosmio/sqm-scripts-nss、laipeng668/nss-packages
           # 影响窄，且 lede master 每天多次提交，纳入会让「有变化」永远成立，故不参与判定。
           sha() {
@@ -310,7 +310,7 @@ jobs:
           sed -i "s/\(kmod-qca.*\)=m/\1=n/" .config
           make defconfig
           echo "======== 关键项 ========"
-          grep -E "^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_|^CONFIG_PACKAGE_(luci-theme-argon|luci-app-openclash|dnsmasq-full|kmod-tun|kmod-nft-tproxy|kmod-qca-nss-ecm|kmod-ath11k-ahb|wpad-mbedtls|sqm-scripts-nss)=" .config
+          grep -E "^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_|^CONFIG_PACKAGE_(luci-theme-argon|luci-app-openclash|dnsmasq-full|kmod-tun|kmod-nft-tproxy|kmod-nft-fullcone|kmod-qca-nss-ecm|kmod-ath11k-ahb|wpad-mbedtls|sqm-scripts-nss)=" .config
           echo "======== iStore 自检 ========"
           # luci-app-store 是"不可见符号"就会静默消失的典型：它的 Kconfig 里有一条
           #   depends on !(PACKAGE_TAR_XZ) || PACKAGE_xz-utils
@@ -339,9 +339,9 @@ jobs:
           cd openwrt
           fail=0
           for p in luci-theme-argon luci-app-openclash dnsmasq-full kmod-tun kmod-nft-tproxy \
-                   kmod-qca-nss-ecm kmod-ath11k-ahb wpad-mbedtls \
+                   kmod-nft-fullcone kmod-qca-nss-ecm kmod-ath11k-ahb wpad-mbedtls \
                    luci-app-timedreboot automount luci-app-quickfile \
-                   luci-app-turboacc luci-app-store mount-utils \
+                   luci-app-store mount-utils \
                    kmod-wireguard wireguard-tools luci-proto-wireguard; do
             if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
               echo "::error::关键包 $p 没进 .config"
@@ -461,7 +461,7 @@ jobs:
               echo
               echo "| 包 | 版本 |"
               echo "|---|---|"
-              for p in luci-app-store luci-theme-argon luci-app-openclash luci-app-turboacc \
+              for p in luci-app-store luci-theme-argon luci-app-openclash \
                        luci-app-argon-config dnsmasq-full wpad-mbedtls kmod-qca-nss-ecm \
                        sqm-scripts-nss luci-proto-wireguard; do
                 v=$(awk -v p="$p" '$1==p{print $3; exit}' "$man")

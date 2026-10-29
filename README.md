@@ -33,7 +33,7 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项。官方镜像
 |---|---|
 | 代理 | OpenClash 0.48.x（含 `dnsmasq-full` 四子项 / `ruby` / `kmod-tun` / `kmod-nft-tproxy` 全套依赖） |
 | VPN | WireGuard（`kmod-wireguard` + `wireguard-tools` + `luci-proto-wireguard` + `luci-lib-uqr`），内核侧是模块，不占 6 MiB |
-| 网络 | `sqm-scripts-nss` + `luci-app-sqm`、`upnp`、`ddns`、`wol`、`turboacc`（锁 NSS ECM 模式） |
+| 网络 | `sqm-scripts-nss` + `luci-app-sqm`、`upnp`、`ddns`、`wol`；硬件加速走 NSS ECM，BBR 走 `kmod-tcp-bbr`，全锥 NAT 走 `kmod-nft-fullcone`（原生 FULLCONENAT，非 turboacc） |
 | 存储 | `samba4`（U 盘共享给局域网）、`diskman`、`automount`、`block-mount`、`e2fsprogs`、`parted`、`fdisk` |
 | 工具 | `ttyd`、`quickfile`、`timedreboot`、`htop`、`nano`、`iperf3`、`iStore`、`zram-swap` |
 
@@ -137,7 +137,7 @@ Kwrt 的 `99-default-settings` 会在首启时写一批"方便推广机"的设�
 
 **三道校验**（都是踩坑后加的）：
 
-- 编译前：**17 个**关键包（argon / openclash / dnsmasq-full / kmod-tun / kmod-nft-tproxy / kmod-qca-nss-ecm / kmod-ath11k-ahb / wpad-mbedtls / turboacc / store / mount-utils / kmod-wireguard …）缺任一 → 直接失败，不白等 1.5 小时
+- 编译前：**16 个**关键包（argon / openclash / dnsmasq-full / kmod-tun / kmod-nft-tproxy / kmod-qca-nss-ecm / kmod-ath11k-ahb / wpad-mbedtls / store / mount-utils / kmod-wireguard …）缺任一 → 直接失败，不白等 1.5 小时
 - 编译后：从成品 `factory.bin` 的 FIT 头读真实内核体积（`od -j4`），超 6 MiB 判失败。**FIT 是镜像阶段才生成的，预编阶段测不到 `itb`**
 - 编译后：扫 manifest 复核推广包未混入
 
@@ -155,7 +155,7 @@ Kwrt 的 `99-default-settings` 会在首启时写一批"方便推广机"的设�
 uclient-fetch -O - https://raw.githubusercontent.com/Living877/kwrt-ax1800/main/scripts/self-check.sh | sh
 ```
 
-结尾打印 `通过 X / 异常 Y`，覆盖机型/密码/DNS 安全三项/BBR/NSS/无线/存储/菜单/监听/时间。
+结尾打印 `通过 X / 异常 Y`，覆盖机型/密码/DNS 安全三项/BBR/全锥 NAT/NSS/无线/存储/菜单/监听/时间。
 WAN 未通拉不下来时，从电脑 `scp scripts/self-check.sh root@192.168.1.1:/tmp/` 再执行；
 **不要整段粘贴脚本**（多行 `if/else` 经终端折行后判定会坏）。
 
@@ -213,7 +213,7 @@ sysupgrade /tmp/fw.bin          # 保留配置；加 -n 则清空配置
 | `immortalwrt/immortalwrt` | `openwrt-25.12` | openssl / ppp / 5 个内核与 nftables 补丁 |
 | `LiBwrt/openwrt-6.x` | `25.12-nss` | NSS 目标树、ath11k、mac80211（最关键） |
 | `LiBwrt/LibWrt` | `25.12-nss` | image-commands.mk / Config-ipq.in / Config.in |
-| `kiddin9/op-packages` | `main` | argon / openclash / turboacc 等插件 |
+| `kiddin9/op-packages` | `main` | argon / openclash / fullconenat-nft 等插件（原 turboacc 已删） |
 
 跟上一次成功构建的记录（`.build-state`）比对，**完全一致就跳过**，有变化才编。编译失败不发 Release，保留上一个可用版本，不会出现「自动编坏了还推给你」。
 
@@ -240,7 +240,7 @@ sysupgrade /tmp/fw.bin          # 保留配置；加 -n 则清空配置
 3. Kwrt 把 `vermagic` 强写成 `1`，方便装任意 kmod 但装错版本照样崩，认准 25.12 / ipq60xx
 4. 上游 `patches/default-packages.patch` 也碰 `include/target.mk`，与去推广的 sed 相邻，上游改结构时可能冲突
 5. **双频合一没有 band steering**：OpenWrt 原生只做"同名"，选频段由客户端决定。智能插座会赖在 2.4G，要强制引导需装 `usteer`
-6. **turboacc 界面里别手动开 flow offloading**，任何卸载都会让部分连接绕过 OpenClash 的 TUN/TPROXY
+6. **别手动开 flow offloading**（防火墙 → 常规设置里的软件/硬件流量分载），任何卸载都会让部分连接绕过 OpenClash 的 TUN/TPROXY；全锥 NAT 与它无关，可以放心开
 
 ## 许可
 
