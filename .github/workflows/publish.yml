@@ -96,6 +96,8 @@ jobs:
       - name: 建 Release
         env:
           GH_TOKEN: ${{ github.token }}
+          # gh 按 CWD 的 .git 猜仓库，显式钉死，避免以后 CWD 变动又认错
+          GH_REPO: ${{ github.repository }}
           TAG: ${{ steps.meta.outputs.tag }}
           UPSTREAM: ${{ steps.meta.outputs.head_sha }}
         run: |
@@ -144,6 +146,7 @@ jobs:
           echo
 
           if gh release create "$TAG" \
+               --repo "$GITHUB_REPOSITORY" \
                --title "AX1800 Pro · $TAG" \
                --notes-file ../release.md \
                *jdcloud_re-ss-01* sysupgrade.bin factory.bin 2>../gh_err.txt; then

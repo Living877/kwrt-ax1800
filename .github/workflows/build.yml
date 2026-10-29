@@ -367,6 +367,14 @@ jobs:
         if: success()
         env:
           GH_TOKEN: ${{ github.token }}
+          # 必须显式指定仓库。gh 是靠「从 CWD 往上找 .git 读 remote」判断操作对象的，
+          # 而这步的 CWD 在 openwrt/bin/targets/... 里面 —— openwrt/ 是第 5 步
+          # clone 出来的 openwrt/openwrt 仓库，gh 会往上撞到它的 .git，
+          # 然后跑去给上游打 release：
+          #   HTTP 403: Resource not accessible by integration
+          #   (https://api.github.com/repos/openwrt/openwrt/releases)
+          # build #11 就是死在这里，编译 4h47m 全白费在最后 3 秒。
+          GH_REPO: ${{ github.repository }}
         run: |
           cd openwrt/bin/targets/qualcommax/ipq60xx
           f=$(ls *jdcloud_re-ss-01-squashfs-factory.bin | head -1)
@@ -426,6 +434,7 @@ jobs:
           ls -lh *jdcloud_re-ss-01* sysupgrade.bin factory.bin
 
           if gh release create "build-${GITHUB_RUN_NUMBER}" \
+               --repo "$GITHUB_REPOSITORY" \
                --title "AX1800 Pro · build ${GITHUB_RUN_NUMBER}" \
                --notes-file release.md \
                *jdcloud_re-ss-01* sysupgrade.bin factory.bin 2>"$RUNNER_TEMP/gh_err.txt"; then
