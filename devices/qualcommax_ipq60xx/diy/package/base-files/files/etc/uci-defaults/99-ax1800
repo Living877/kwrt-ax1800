@@ -1,11 +1,84 @@
 #!/bin/sh
-# 首次启动：默认主题设为 Argon 3.x（后台“Argon 主题设置”里仍可改）
-# 只在第一次启动跑一次，之后由 /etc/config/luci 持久化。
+# 首次启动的一次性配置：默认主题 / IPv6 / PPPoE 拨号 / WiFi 双频合一
+#
+# 由 /etc/init.d/boot 的 uci_apply_defaults 用 `.` 引入执行，顺序是：
+#   wifi config（生成默认无线配置）→ kmodloader → uci-defaults → 各服务启动
+# 所以这里能直接改到 radio0/radio1。若无线还没生成（驱动未就绪），
+# 返回 1 让脚本留在 /etc/uci-defaults 下，下次启动重试；网络部分已提交。
+#
+# 注意：这些值同时会被写入 /etc/config/{network,dhcp,wireless,luci}，
+# 刷机后照样能在 LuCI 里改，这里只决定"第一次开机的默认值"。
 
-[ -x /sbin/uci ] || exit 0
+[ -x /sbin/uci ] || return 1
 
+# ============ 1. 默认主题 Argon 3.x ============
 uci -q get luci.main >/dev/null 2>&1 || uci -q set luci.main=core
 uci -q set luci.main.mediaurlbase='/luci-static/argon'
-uci -q commit luci
 
-exit 0
+# ============ 2. IPv6：内核已开 CONFIG_IPV6，这里把 LAN 侧分发打开 ============
+# ip6assign=60 从 WAN 拿到的 PD 里切 /60 给 LAN；ra/dhcpv6 让下游能拿到地址
+uci -q set network.lan.ip6assign='60'
+uci -q set dhcp.lan.dhcpv4='server'
+uci -q set dhcp.lan.dhcpv6='server'
+uci -q set dhcp.lan.ra='server'
+uci -q set dhcp.lan.ra_slaac='1'
+uci -q delete dhcp.lan.ra_flags
+uci -q add_list dhcp.lan.ra_flags='managed-config'
+uci -q add_list dhcp.lan.ra_flags='other-config'
+
+# ============ 3. WAN：PPPoE 拨号 ============
+# 账号密码留空，刷完在「网络 → 接口 → WAN」里填；ipv6=1 让 PPP 协商 IPv6CP，
+# netifd 会自动拉起 wan6（DHCPv6 客户端，拿地址 + PD）。
+PPPOE_USER=''
+PPPOE_PASS=''
+uci -q set network.wan.proto='pppoe'
+uci -q set network.wan.username="$PPPOE_USER"
+uci -q set network.wan.password="$PPPOE_PASS"
+uci -q set network.wan.ipv6='1'
+uci -q set network.wan.keepalive='10 5'
+uci -q delete network.wan6
+uci -q set network.wan6='interface'
+uci -q set network.wan6.device='@wan'
+uci -q set network.wan6.proto='dhcpv6'
+uci -q set network.wan6.reqaddress='try'
+uci -q set network.wan6.reqprefix='auto'
+
+# ============ 4. WiFi 双频合一 ============
+# 每个 radio 的 iface 用同一组 SSID/密码，即 2.4G 与 5G 同名。
+# 11k（邻居报告）+ 11v（BSS 转换管理）帮客户端挑频段；11r 单台无意义且部分
+# 老设备会连不上，关掉。
+WIFI_SSID='CLI'
+WIFI_KEY='13673361140ww'
+
+[ -f /etc/board.json ] || return 1
+uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1 || /sbin/wifi config
+uci -q get wireless.@wifi-iface[0] >/dev/null 2>&1 || return 1
+
+i=0
+while uci -q get "wireless.@wifi-iface[$i]" >/dev/null 2>&1; do
+	uci -q set "wireless.@wifi-iface[$i].ssid=$WIFI_SSID"
+	uci -q set "wireless.@wifi-iface[$i].key=$WIFI_KEY"
+	uci -q set "wireless.@wifi-iface[$i].encryption=psk2"
+	uci -q set "wireless.@wifi-iface[$i].disabled=0"
+	uci -q set "wireless.@wifi-iface[$i].ieee80211k=1"
+	uci -q set "wireless.@wifi-iface[$i].ieee80211v=1"
+	uci -q set "wireless.@wifi-iface[$i].ieee80211r=0"
+	i=$((i + 1))
+done
+[ "$i" -gt 0 ] || return 1
+
+# 按频段定带宽：2.4G HT40，5G HE80（160MHz 在亚瑟上容易掉速）
+for r in $(uci -q show wireless | sed -n 's/^wireless\.\(radio[0-9]*\)=wifi-device$/\1/p'); do
+	case "$(uci -q get "wireless.$r.band")" in
+		2g) uci -q set "wireless.$r.htmode=HT40" ;;
+		5g) uci -q set "wireless.$r.htmode=HE80" ;;
+	esac
+	uci -q set "wireless.$r.disabled=0"
+done
+
+uci -q commit luci
+uci -q commit network
+uci -q commit dhcp
+uci -q commit wireless
+
+return 0
