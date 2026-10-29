@@ -1,0 +1,17 @@
+# Windows 上 checkout 默认会转成 CRLF，脚本/补丁/ucode 模板都会被污染，一律强制 LF
+* text=auto eol=lf
+
+*.sh      text eol=lf
+*.ut      text eol=lf
+*.yml     text eol=lf
+*.md      text eol=lf
+*.ini     text eol=lf
+*.config  text eol=lf
+*.patch   text eol=lf
+*.dts     text eol=lf
+*.dtsi    text eol=lf
+*.po      text eol=lf
+
+*.png     binary
+*.jpg     binary
+*.ipq6018 binary

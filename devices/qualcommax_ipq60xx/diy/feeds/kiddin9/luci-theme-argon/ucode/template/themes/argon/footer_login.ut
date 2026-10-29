@@ -1,0 +1,17 @@
+{#
+	Argon is a clean HTML5 theme for LuCI.
+
+	本地修改版：移除登录页页脚全部外链与作者署名，只保留一行纯文本版本信息。
+-#}
+
+</div>
+<footer>
+	<div class="login-footer-links">
+		<span>LuCI · Argon {# vPKG_VERSION #}</span>
+	</div>
+</footer>
+</div>
+</div>
+{% include('themes/' + theme + '/page_scripts', { is_login: true }) %}
+</body>
+</html>

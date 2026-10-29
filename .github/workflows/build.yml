@@ -1,0 +1,227 @@
+name: Build Kwrt · AX1800 Pro
+
+# 只在手动点「Run workflow」时跑。
+# 上游仓库只有 repository_dispatch（要靠维护者自己的 token 触发），fork 后必须自己加这个入口。
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: '设备目录（devices/ 下的名字）'
+        type: string
+        default: 'qualcommax_ipq60xx'
+      skip_check:
+        description: '跳过编译前的关键包校验（不建议）'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 350
+
+    steps:
+      - name: 检出工程
+        uses: actions/checkout@v4
+
+      - name: 腾磁盘
+        uses: coder-xiaomo/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: 安装编译依赖
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -qq update
+          sudo -E apt-get -qq install build-essential clang flex bison g++ gawk \
+            gcc-multilib g++-multilib gettext git libncurses5-dev libssl-dev \
+            python3-setuptools rsync swig unzip zlib1g-dev file wget dwarves \
+            llvm python3-pyelftools libpython3-dev aria2 jq rename \
+            libelf-dev device-tree-compiler libgmp3-dev libmpc-dev libfuse-dev
+          sudo timedatectl set-timezone "Asia/Shanghai"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git config --global user.name "github-actions[bot]"
+
+      - name: 克隆 OpenWrt 25.12
+        run: |
+          git clone --depth 1 -b openwrt-25.12 https://github.com/openwrt/openwrt openwrt
+          cd openwrt && git log --oneline -1
+
+      - name: 打定制补丁并生成 .config
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -x
+          TARGET="${TARGET:-qualcommax_ipq60xx}"
+          echo "目标设备目录: $TARGET"
+          # 上游 diy.sh 依赖这个函数：稀疏克隆指定目录到当前树
+          function git_clone_path() {
+            trap 'rm -rf "$tmpdir"' EXIT
+            branch="$1" rurl="$2" mv="$3"
+            [[ "$mv" != "mv" ]] && shift 2 || shift 3
+            rootdir="$PWD"
+            tmpdir="$(mktemp -d)" || exit 1
+            if [ ${#branch} -lt 10 ]; then
+              git clone -b "$branch" --depth 1 --filter=blob:none --sparse "$rurl" "$tmpdir"
+              cd "$tmpdir"
+            else
+              git clone --filter=blob:none --sparse "$rurl" "$tmpdir"
+              cd "$tmpdir"
+              git checkout $branch
+            fi
+            if [ "$?" != 0 ]; then echo "error on $rurl"; exit 1; fi
+            git sparse-checkout init --cone
+            git sparse-checkout set $@
+            [[ "$mv" != "mv" ]] && cp -rn ./* $rootdir/ || mv -n $@/* $rootdir/$@/
+            cd $rootdir
+          }
+          export -f git_clone_path
+
+          mkdir -p openwrt
+          cp -rf devices/common/. openwrt/
+          cp -rf "devices/$TARGET/." openwrt/
+          cp -rf devices openwrt/
+          cd openwrt
+
+          chmod +x "devices/common/diy.sh"
+          /bin/bash "devices/common/diy.sh"
+
+          cp -f devices/common/.config .config
+          if [ -f "devices/$TARGET/.config" ]; then
+            echo >> .config
+            cat "devices/$TARGET/.config" >> .config
+          fi
+
+          if [ -f "devices/$TARGET/diy.sh" ]; then
+            chmod +x "devices/$TARGET/diy.sh"
+            /bin/bash "devices/$TARGET/diy.sh"
+          fi
+
+          # 设备级 diy/ 覆盖层（主题模板、banner、uci-defaults）最后铺上去
+          cp -Rf ./diy/* ./ || true
+
+      - name: 应用 devices 补丁
+        env:
+          TARGET: ${{ inputs.target }}
+        run: |
+          set -x
+          TARGET="${TARGET:-qualcommax_ipq60xx}"
+          cd openwrt
+          # 公共补丁并进设备补丁目录后统一按顺序打
+          cp -rn devices/common/patches "devices/$TARGET/" || true
+          if [ -n "$(ls -A devices/$TARGET/*.bin.patch 2>/dev/null)" ]; then
+            git apply devices/$TARGET/patches/*.bin.patch
+          fi
+          find "devices/$TARGET/patches" -maxdepth 1 -type f -name '*.revert.patch' -print0 \
+            | sort -z | xargs -I % -t -0 -n 1 sh -c "patch -d './' -R --no-backup-if-mismatch -p1 -F 1 -i '%'"
+          find "devices/$TARGET/patches" -maxdepth 1 -type f -name '*.patch' ! -name '*.revert.patch' ! -name '*.bin.patch' -print0 \
+            | sort -z | xargs -I % -t -0 -n 1 sh -c "patch -d './' --no-backup-if-mismatch -p1 -F 1 -i '%'"
+
+      - name: 生成配置
+        run: |
+          cd openwrt
+          make defconfig
+          # 上游同款收身：把无线驱动与 kmod-qca* 的可选模块从 =m 关成 =n，
+          # 再由 defconfig 按依赖重新解算（必需项会自动回来）
+          sed -n '/# Wireless Drivers/,/# end of Wireless Drivers/p' .config | sed -e 's/=m/=n/' >> .config
+          sed -i "s/\(kmod-qca.*\)=m/\1=n/" .config
+          make defconfig
+          echo "======== 关键项 ========"
+          grep -E "^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_|^CONFIG_PACKAGE_(luci-theme-argon|luci-app-openclash|dnsmasq-full|kmod-tun|kmod-nft-tproxy|kmod-qca-nss-ecm|kmod-ath11k-ahb|wpad-mbedtls|sqm-scripts-nss)=" .config
+          echo "======== 应被关闭的项 ========"
+          grep -E "luci-app-advancedplus|luci-app-store|dockerman|CONFIG_ALL_NONSHARED|TARGET_ALL_PROFILES" .config
+
+      - name: 编译前校验
+        if: ${{ inputs.skip_check == false }}
+        run: |
+          cd openwrt
+          fail=0
+          for p in luci-theme-argon luci-app-openclash dnsmasq-full kmod-tun kmod-nft-tproxy \
+                   kmod-qca-nss-ecm kmod-ath11k-ahb wpad-mbedtls; do
+            if ! grep -q "^CONFIG_PACKAGE_${p}=y" .config; then
+              echo "::error::关键包 $p 没进 .config"
+              fail=1
+            fi
+          done
+          if grep -q "^CONFIG_PACKAGE_luci-app-advancedplus=y" .config; then
+            echo "::error::advancedplus 还在，去推广没生效"
+            fail=1
+          fi
+          if grep -q "^CONFIG_TARGET_ALL_PROFILES=y" .config; then
+            echo "::error::还在编全机型，会让时间翻几倍"
+            fail=1
+          fi
+          [ "$fail" = 0 ] || exit 1
+          echo "校验通过"
+
+      - name: 编译
+        run: |
+          cd openwrt
+          make -j$(nproc) || { log=$(mktemp); make V=s &> "$log"; tail -80 "$log"; exit 1; }
+
+      - name: 复核内核体积
+        run: |
+          cd openwrt
+          f=$(find bin/targets/qualcommax/ipq60xx -maxdepth 1 -name '*jdcloud_re-ss-01-squashfs-factory.bin' | head -1)
+          [ -n "$f" ] || { echo "::error::没找到 factory.bin"; exit 1; }
+          magic=$(od -An -tx1 -N4 "$f" | tr -d ' \n')
+          if [ "$magic" != "d00dfeed" ]; then
+            echo "::error::factory.bin 头不是 FIT（$magic）"; exit 1
+          fi
+          fit=$(od -An -tu4 -j4 -N4 --endian=big "$f" | tr -d ' ')
+          lim=6291456
+          awk -v a="$fit" -v b="$lim" 'BEGIN{
+            printf "内核 FIT: %.3f MiB / 6 MiB 分区（占用 %.1f%%，余量 %d KiB）\n", a/1048576, a*100/b, (b-a)/1024
+            exit (a>b)
+          }' || { echo "::error::内核超过 6MiB，刷进去会溢出"; exit 1; }
+
+      - name: 上传产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: kwrt-ax1800-${{ github.run_number }}
+          path: |
+            openwrt/bin/targets/qualcommax/ipq60xx/*jdcloud_re-ss-01*
+            openwrt/.config
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: 发布 Release
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd openwrt/bin/targets/qualcommax/ipq60xx
+          f=$(ls *jdcloud_re-ss-01-squashfs-factory.bin | head -1)
+          fit=$(od -An -tu4 -j4 -N4 --endian=big "$f" | tr -d ' ')
+          md5sum *jdcloud_re-ss-01* > md5sums.txt
+          {
+            echo "京东云亚瑟 AX1800 Pro（IPQ6000 / jdcloud_re-ss-01）· Kwrt 自编"
+            echo
+            echo "| 项 | 值 |"
+            echo "|---|---|"
+            echo "| 内核 FIT | $fit 字节（$(awk -v a=$fit 'BEGIN{printf "%.3f", a/1048576}') MiB，6MiB 分区） |"
+            echo "| 主题 | Argon 3.x（页脚已去外链） |"
+            echo "| 机型补丁 | q6 85MiB · ath11k 16VDEV/512peers |"
+            echo "| 默认 | 192.168.1.1 · 主机名 Arthur |"
+            echo
+            echo "刷机：U-Boot 网页 \`/uimage.html\` 上传 \`*-squashfs-factory.bin\`，别碰 /img.html /cdt.html /art.html"
+            echo
+            echo "以后升级用 \`*-squashfs-sysupgrade.bin\`"
+          } > release.md
+          gh release create "build-${GITHUB_RUN_NUMBER}" \
+            --title "AX1800 Pro · build ${GITHUB_RUN_NUMBER}" \
+            --notes-file release.md \
+            *jdcloud_re-ss-01*

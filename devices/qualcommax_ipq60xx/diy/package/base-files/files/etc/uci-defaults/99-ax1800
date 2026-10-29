@@ -1,0 +1,11 @@
+#!/bin/sh
+# 首次启动：默认主题设为 Argon 3.x（后台“Argon 主题设置”里仍可改）
+# 只在第一次启动跑一次，之后由 /etc/config/luci 持久化。
+
+[ -x /sbin/uci ] || exit 0
+
+uci -q get luci.main >/dev/null 2>&1 || uci -q set luci.main=core
+uci -q set luci.main.mediaurlbase='/luci-static/argon'
+uci -q commit luci
+
+exit 0
