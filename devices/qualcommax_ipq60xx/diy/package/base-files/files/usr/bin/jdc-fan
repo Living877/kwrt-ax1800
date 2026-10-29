@@ -1,0 +1,115 @@
+#!/bin/sh
+#
+# jdc-fan —— 京东云亚瑟 AX1800 Pro 温控风扇
+# 借用 green:status 状态灯脚做 PWM 调速（恩山 tid-8492422 方案）
+#
+# 用法：
+#   jdc-fan daemon    前台常驻温控（由 /etc/init.d/jdc-fan 用 procd 拉起）
+#   jdc-fan status    查看当前温度 / 转速 / 模式
+#   jdc-fan set N     手动固定转速 N%（0~100，0=停 100=满速）
+#   jdc-fan auto      回到自动温控
+#   jdc-fan stop      停风扇（并让常驻进程退出）
+#
+# 可调参数（改完重启服务生效）：
+LED=/sys/class/leds/green:status
+FAN_LOW=1        # 1 = 该脚低电平时风扇转；若接反（低电平不转）改成 0
+PERIOD_MS=50     # PWM 周期（毫秒）
+INTERVAL=5       # 测温间隔（秒）
+HYS=2            # 降档回差（℃）
+BOOT_DELAY=10    # 开机后延迟接管（秒）
+
+STATE=/tmp/jdc-fan.mode
+MANUAL=/tmp/jdc-fan.speed
+CUR=/tmp/jdc-fan.cur
+
+read_temp() {
+  awk 'BEGIN{m=-999999} {if($1+0>m) m=$1+0} END{if(m==-999999)m=0; printf "%d", m/1000}' \
+    /sys/class/thermal/thermal_zone*/temp 2>/dev/null
+}
+
+temp_to_speed() {
+  local t=$1
+  if [ "$t" -ge 70 ]; then echo 100
+  elif [ "$t" -ge 65 ]; then echo 80
+  elif [ "$t" -ge 60 ]; then echo 50
+  elif [ "$t" -ge 50 ]; then echo 30
+  elif [ "$t" -ge 40 ]; then echo 20
+  else echo 0
+  fi
+}
+
+set_pwm() {
+  local speed=$1 on
+  if [ "$FAN_LOW" = 1 ]; then
+    on=$(( (100 - speed) * PERIOD_MS / 100 ))
+  else
+    on=$(( speed * PERIOD_MS / 100 ))
+  fi
+  grep -q '\[timer\]' "$LED/trigger" 2>/dev/null || echo timer > "$LED/trigger" 2>/dev/null || return 1
+  echo "$on" > "$LED/delay_on" 2>/dev/null
+  echo "$((PERIOD_MS - on))" > "$LED/delay_off" 2>/dev/null
+}
+
+stop_fan() {
+  echo none > "$LED/trigger" 2>/dev/null
+  if [ "$FAN_LOW" = 1 ]; then
+    echo 1 > "$LED/brightness" 2>/dev/null
+  else
+    echo 0 > "$LED/brightness" 2>/dev/null
+  fi
+}
+
+daemon() {
+  if [ ! -d "$LED" ]; then
+    echo "jdc-fan: $LED 不存在，无法控制风扇" >&2
+    exit 1
+  fi
+  trap 'stop_fan; rm -f "$STATE"; exit 0' TERM INT
+  [ -f /tmp/jdc-fan.nodelay ] || sleep "$BOOT_DELAY"
+  echo auto > "$STATE"
+  local t speed=0 want mode
+  while :; do
+    mode=$(cat "$STATE" 2>/dev/null)
+    if [ "$mode" = stop ]; then
+      stop_fan
+      exit 0
+    fi
+    t=$(read_temp)
+    if [ "$mode" = manual ]; then
+      speed=$(cat "$MANUAL" 2>/dev/null)
+      case "$speed" in ''|*[!0-9]*) speed=0 ;; esac
+      [ "$speed" -gt 100 ] && speed=100
+      [ "$speed" -lt 0 ] && speed=0
+    else
+      want=$(temp_to_speed "$t")
+      if [ "$want" -gt "$speed" ]; then
+        speed=$want
+      elif [ "$want" -lt "$speed" ]; then
+        if [ "$(temp_to_speed "$((t + HYS))")" -le "$want" ]; then
+          speed=$want
+        fi
+      fi
+    fi
+    echo "$speed" > "$CUR" 2>/dev/null
+    set_pwm "$speed"
+    sleep "$INTERVAL"
+  done
+}
+
+case "$1" in
+  daemon) daemon ;;
+  status)
+    echo "温度: $(read_temp)℃  转速: $(cat "$CUR" 2>/dev/null)%  模式: $(cat "$STATE" 2>/dev/null)"
+    ;;
+  set)
+    echo manual > "$STATE"
+    echo "${2:-0}" > "$MANUAL"
+    set_pwm "${2:-0}"
+    ;;
+  auto) echo auto > "$STATE" ;;
+  stop) echo stop > "$STATE"; stop_fan ;;
+  *)
+    echo "用法: $0 {daemon|status|set N|auto|stop}" >&2
+    exit 1
+    ;;
+esac
