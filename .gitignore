@@ -15,3 +15,10 @@ Thumbs.db
 
 # 会话记忆/自动化状态，属于本机工具数据，不进仓库
 .workbuddy/
+
+# 设备备份二进制（含 ART/DEVCFG/校准数据，含机器唯一标识，绝不入库）
+# 仅保留 backups/**/README.md 作为备份规范说明
+backups/**/*.bin
+backups/**/*.img
+backups/**/*.gz
+backups/**/MANIFEST*
