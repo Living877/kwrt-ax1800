@@ -1,9 +1,9 @@
 # 由 workflow 自动维护，记录上一次成功构建时用到的上游 HEAD
 # 定时任务据此判断上游有没有变化，没变就不编译
 openwrt=5cf752f7ff54eed3dbc0e9460292d54996576117
-immortalwrt=84b665b5de552e297d0f7d755b88a46fc0cfeb13
+immortalwrt=3682a14dd5ec6382af65d7e72b5b415b5f3173a8
 libwrt_tree=a151272502f075bfc5b708e8e696870aa2c48868
 libwrt_cfg=a151272502f075bfc5b708e8e696870aa2c48868
-oppackages=57d68d2ceca78905af90cd8f2fc225d582e24a56
-built_at=2026-10-30T04:53:55Z
-build=17
+oppackages=b7ebf9532e73629cf306460828ab29dd7cb6c5be
+built_at=2026-10-30T16:11:17Z
+build=21
