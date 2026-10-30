@@ -48,6 +48,13 @@ if [ $? -eq 0 ]; then ok "NSS驱动已加载"; else no "NSS驱动未加载"; fi
 # NSS 固件：包在、文件不在 或者 驱动 -110 超时，表现都是"能上网但没有硬件加速"，
 # 不报错、不变慢到明显察觉，只能靠 dmesg 里那行 probe failed 才发现
 if [ -s /lib/firmware/qca-nss0.bin ]; then ok "NSS固件qca-nss0.bin在"; else no "缺/lib/firmware/qca-nss0.bin"; fi
+if [ -x /etc/init.d/nss-fw-early ]; then ok "nss-fw-early(开机早期补别名)在"; else no "缺/etc/init.d/nss-fw-early"; fi
+ft=""
+for p in /sys/class/firmware/timeout /sys/module/firmware_class/parameters/loading_timeout /sys/module/firmware_class/parameters/timeout
+do
+	if [ -r "$p" ]; then ft=$(cat "$p" 2>/dev/null); break; fi
+done
+if [ "$ft" = "10" ]; then ok "固件超时10s(防级联)"; else no "固件超时=${ft:-读不到}(期望10，60s会级联拖慢开机)"; fi
 dmesg 2>/dev/null | grep -q "qca-nss 39000000.nss: probe with driver qca-nss failed"
 if [ $? -eq 0 ]; then no "qca-nss probe失败(-110)，NSS硬件加速没起来"; else ok "qca-nss probe正常"; fi
 

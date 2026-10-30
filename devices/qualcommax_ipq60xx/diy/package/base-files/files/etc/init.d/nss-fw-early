@@ -1,0 +1,80 @@
+#!/bin/sh /etc/rc.common
+# 开机早期：把 NSS 固件按驱动要的名字备好，并把固件等待超时从 60s 收到 10s。
+#
+# 1) 为什么要提前备固件
+#    包里装的是 /lib/firmware/qca-nss0-retail.bin，而 qca-nss-drv 请求的名字
+#    不带 -retail 后缀。二者对不上时，内核先直接读文件失败，然后回落到
+#    "用户态热插拔"路径，等满 firmware_loading_timeout（默认 60 秒）才返回 -110。
+#    本机 dmesg 实测：
+#        [ 79.8] request_firmware failed with err code: -110
+#        [ 79.8] firmware load from driver failed
+#        [ 79.8] qca-nss 39000000.nss: probe with driver qca-nss failed with error -110
+#    上游靠 /etc/hotplug.d/firmware/10-qca-nss-fw 在请求发生的那一刻补文件，
+#    这又是在赌那 60 秒窗口 —— 和 ath11k 的 cal 是同一个坑（那边已经由
+#    caldata-early 改成开工前备好）。这里同样改成开工前备好，驱动 probe 秒过。
+#
+# 2) 为什么还要收超时
+#    kmodloader 是串行 insmod，任何一个固件请求卡 60 秒都会把后面所有模块往后推。
+#    实测这一版镜像：NSS 卡到 84.9s，ath11k 被推到 147s 才 load，cal 再等 60s
+#    到 269s 报错，开机拖到 4 分半。收到 10 秒后，即使将来还有没备到的固件，
+#    最多损失 10 秒，不会级联成"整机慢 4 分钟"。
+#
+# 两个动作都幂等：别名已存在就跳过；超时参数写不进去也不报错。
+# 只在 jdcloud 机型上动手，别的机器一个字节都不改。
+
+START=08
+STOP=08
+
+FW=/lib/firmware
+
+start() {
+	# --- 固件等待超时 60s -> 10s（纯兜底，正常路径根本用不到回落） ---
+	# 这个值在不同内核里暴露的位置不一样，三种都试一遍，能写进去就生效：
+	#   /sys/class/firmware/timeout                           （class 属性，最常见）
+	#   /sys/module/firmware_class/parameters/loading_timeout （模块参数原名）
+	#   /sys/module/firmware_class/parameters/timeout         （个别内核改了名）
+	for p in /sys/class/firmware/timeout \
+	         /sys/module/firmware_class/parameters/loading_timeout \
+	         /sys/module/firmware_class/parameters/timeout; do
+		if [ -w "$p" ]; then
+			echo 10 > "$p" 2>/dev/null && break
+		fi
+	done
+
+	# --- 只在 JDCloud 亚瑟上补 NSS 固件别名 ---
+	grep -qs jdcloud /proc/device-tree/compatible || return 0
+
+	# 已经有了就别动
+	if [ -e "$FW/qca-nss0.bin" ]; then
+		return 0
+	fi
+
+	# 找包实际装进来的那个文件（正常是 qca-nss0-retail.bin）
+	src=""
+	for c in "$FW"/qca-nss0-retail.bin "$FW"/qca-nss0*.bin; do
+		if [ -f "$c" ]; then
+			src="$c"
+			break
+		fi
+	done
+
+	if [ -z "$src" ]; then
+		logger -t nss-fw-early "没找到 qca-nss0 固件，跳过"
+		return 0
+	fi
+
+	# 优先软链；软链不成立（比如文件系统不支持）就复制一份
+	if ln -sf "${src##*/}" "$FW/qca-nss0.bin" 2>/dev/null && [ -e "$FW/qca-nss0.bin" ]; then
+		logger -t nss-fw-early "已建软链 qca-nss0.bin -> ${src##*/}"
+	else
+		if cp -f "$src" "$FW/qca-nss0.bin" 2>/dev/null; then
+			logger -t nss-fw-early "已复制 ${src##*/} -> qca-nss0.bin"
+		else
+			logger -t nss-fw-early "补 qca-nss0.bin 失败（软链和复制都不成）"
+		fi
+	fi
+}
+
+stop() {
+	return 0
+}

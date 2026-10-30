@@ -75,6 +75,12 @@ if [ -x /etc/init.d/caldata-early ]; then
 	/etc/init.d/caldata-early enable 2>/dev/null
 fi
 
+# 同理，NSS 固件的别名与固件等待超时也由 /etc/init.d/nss-fw-early（START=08）
+# 在模块加载前处理，这里只补 enable。
+if [ -x /etc/init.d/nss-fw-early ]; then
+	/etc/init.d/nss-fw-early enable 2>/dev/null
+fi
+
 # ============ 3.5 cal 兜底：ath11k 校准数据 ============
 # ath11k 在 Q6 起来后（~80s）通过 QMI 请求 cal-ahb-c000000.wifi.bin。
 # 上游 11-ath11k-caldata 热插拔脚本本应自动从 eMMC 的 0:ART 分区切出它，
