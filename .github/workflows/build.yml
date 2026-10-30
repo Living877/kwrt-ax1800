@@ -1,8 +1,10 @@
 name: Build Kwrt · AX1800 Pro
 
-# 两种触发方式：
+# 三种触发方式：
 #   1) workflow_dispatch —— 手动点「Run workflow」，无条件编译（拿当天最新上游）
-#   2) schedule          —— 每周一定时跑，先探测 5 个上游源的 HEAD，
+#   2) push              —— 提交信息里带 [build] 就无条件编译；
+#                           不带则按上游是否变化决定（同下面定时逻辑）
+#   3) schedule          —— 每周一定时跑，先探测 5 个上游源的 HEAD，
 #                          跟 .build-state 里上次构建记录比对，没变就跳过，变了才编
 #
 # 上游源码全部是 --depth 1 现拉、不 pin 版本，所以「手动触发即最新」。
@@ -21,6 +23,14 @@ on:
         description: '跳过编译前的关键包校验（不建议）'
         type: boolean
         default: false
+  push:
+    # 给不会用网页点「Run workflow」的场合留一条路：
+    # commit message 里带 [build] 就无条件编译，不带则只在上游有变化时编。
+    # 好处是「git push 即可构建」，不需要 PAT、不需要网页操作。
+    branches: [ main ]
+    paths-ignore:
+      # 构建结束后 bot 自己提交的进度记录，不该再触发一轮
+      - '.build-state'
   schedule:
     # 每天 03:00（北京时间）= 前一天 19:00 UTC
     # 只跑得很轻：probe 先比对 .build-state，上游没变就直接跳过（约 1 分钟），
@@ -55,6 +65,10 @@ jobs:
 
       - name: 探测上游是否有更新
         id: check
+        env:
+          # 用 env 传进来，不要直接插值到 shell（commit message 可能含引号/反引号）
+          EVENT_NAME: ${{ github.event_name }}
+          COMMIT_MSG: ${{ github.event.head_commit.message }}
         run: |
           set -eu
           # 只判定 5 个真正决定固件内容的源：
@@ -102,9 +116,16 @@ jobs:
             fi
           done
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
             echo "触发方式：手动 → 无条件编译"
             changed=1
+          elif [ "$EVENT_NAME" = "push" ]; then
+            if printf '%s' "$COMMIT_MSG" | grep -q '\[build\]'; then
+              echo "触发方式：push + [build] 标记 → 无条件编译"
+              changed=1
+            else
+              echo "触发方式：push（提交信息无 [build]）→ 仅上游有变化时编译"
+            fi
           else
             echo "触发方式：定时"
           fi
