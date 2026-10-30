@@ -71,13 +71,15 @@ uci -q commit dhcp
 
 # 真正的保障是 /etc/init.d/caldata-early（START=09，早于 ath11k 模块加载，
 # 每次开机都会检查）。这里只补一句 enable，防止打包时 rc.d 软链没自动建出来。
-if [ -x /etc/init.d/caldata-early ]; then
+if [ -f /etc/init.d/caldata-early ]; then
+	chmod +x /etc/init.d/caldata-early
 	/etc/init.d/caldata-early enable 2>/dev/null
 fi
 
 # 同理，NSS 固件的别名与固件等待超时也由 /etc/init.d/nss-fw-early（START=08）
 # 在模块加载前处理，这里只补 enable。
-if [ -x /etc/init.d/nss-fw-early ]; then
+if [ -f /etc/init.d/nss-fw-early ]; then
+	chmod +x /etc/init.d/nss-fw-early
 	/etc/init.d/nss-fw-early enable 2>/dev/null
 fi
 
