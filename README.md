@@ -291,6 +291,7 @@ sysupgrade /tmp/fw.bin          # 保留配置；加 -n 则清空配置
 | [`docs/上游对比诊断.md`](docs/上游对比诊断.md) | LuCI 500 / NSS 固件名 / cal 提取三个 bug 的溯源：逐条贴上游原文，说明为什么官方树不中、Kwrt 缝合后必中、社区靠重启掩盖 |
 | [`docs/优化审计.md`](docs/优化审计.md) | 对比 GitHub 上 4 个同机型工程，列出可补的 5 个 A 级优化与不建议做的 C 级 |
 | [`docs/固件验收清单.md`](docs/固件验收清单.md) | 刷完怎么验：首启即验 / 功能 / 性能 / 稳定性，标注哪些能一键、哪些必须人肉 |
+| [`docs/重建待办.md`](docs/重建待办.md) | **下次重构建前先看**：build-17 实机审计汇总——备份清单、已修 bug 防回归、新发现的适配问题、Secrets 配置、`sysupgrade -n` 刷机单 |
 
 脚本：`scripts/self-check.sh`（固件一键自检）、`scripts/wifi-diag.sh`（无线专项排障）、
 `scripts/art-backup.py`（在电脑上校验备份里的 ART，见 5.7）。
