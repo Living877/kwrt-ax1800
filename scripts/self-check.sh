@@ -90,6 +90,19 @@ nw=$(iw dev 2>/dev/null | grep -c Interface)
 if [ "$nw" -ge 2 ]; then ok "无线接口 $nw 个"; else no "无线接口 $nw 个(期望2)"; fi
 ssid=$(uci -q show wireless 2>/dev/null | grep -o "ssid='[^']*'" | head -1)
 if [ -n "$ssid" ]; then ok "$ssid"; else no "无SSID配置"; fi
+
+# 加密方式必须单独验：build-17 上首启脚本写了 psk2，实机却是 none（开放热点），
+# 只查"SSID 存不存在"根本验不出这个问题。
+enc=$(uci -q show wireless 2>/dev/null | grep -o "encryption='[^']*'" | sort -u | tr '\n' ' ')
+if echo "$enc" | grep -q "none"; then
+	no "无线开放无加密($enc)"
+elif [ -n "$enc" ]; then
+	ok "无线加密 $enc"
+else
+	no "读不到encryption配置"
+fi
+
+# root 空密码由脚本开头统一检查（能识别锁定账号），此处不重复
 ps w 2>/dev/null | grep -q '[h]ostapd'
 if [ $? -eq 0 ]; then ok "hostapd运行中"; else no "hostapd未运行"; fi
 
@@ -104,7 +117,7 @@ info "内存 $(free | awk '/^Mem:/{printf "%d/%dMB",$3/1024,$2/1024}')"
 
 if [ -f /usr/lib/lua/luci/controller/store.lua ]; then ok "iStore控制器在"; else no "缺store.lua"; fi
 # luci-app-package-manager 被 luci-nginx / luci 硬依赖，摘不掉（2026-10-30 实机确认），
-# 所以只验两件事：官方页是否已挪到系统下、iStore 的菜单标题是否改对了
+# 改成「iStore 占顶级 + 官方页挪系统下」，靠三份覆盖共存，少一份就出问题，所以三处都要验
 if grep -q '"admin/system/package-manager"' /usr/share/luci/menu.d/luci-app-package-manager.json 2>/dev/null; then
 	ok "软件包已挪到系统下"
 else
@@ -114,6 +127,19 @@ if grep -q '"iStore", 30' /usr/lib/lua/luci/controller/store.lua 2>/dev/null; th
 	ok "iStore菜单标题正确"
 else
 	no "store.lua 里菜单标题不是 iStore"
+fi
+# 第三处：iStore 页面里「更多插件请使用软件包」的链接，不指到新路径就会原地跳回自己
+if grep -q 'admin/system/package-manager' /usr/lib/lua/luci/view/store/main.htm 2>/dev/null; then
+	ok "iStore内软件包链接正确"
+else
+	no "main.htm 链接未指向系统下，iStore 里点软件包会自我跳转"
+fi
+# 概览页模板：menu.d 声明 admin_status/index，但覆盖包可能只装 luaindex.htm（聚合到不存在的子目录）
+# → 首页白屏。两个条件满足其一即视为正常。
+if [ -f /usr/lib/lua/luci/view/admin_status/index.htm ] || [ -d /usr/lib/lua/luci/view/admin_status/index ]; then
+	ok "概览页模板在位"
+else
+	no "概览页 admin_status/index 模板缺失，LuCI 首页可能白屏"
 fi
 
 # controller 里 require 的 luci.* 模块必须真的存在，否则 dispatcher 建菜单时会抛
