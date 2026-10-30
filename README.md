@@ -180,8 +180,19 @@ build-13 的实测首启：`qca-nss` probe `-110`、`qmi failed to load CAL data
 
 **别碰** `/img.html`（刷 GPT）、`/cdt.html`、`/art.html`（WiFi 校准，写坏就废）。
 
-> 动手前建议先备份一次校准分区（64 KiB，含每台机器唯一的 PA/校准数据，写坏这台的 5G 就永久没了）：
-> `dd if=/dev/mmcblk0p15 of=/tmp/art.bin bs=4096 count=64`，再把 `/tmp/art.bin` 抓到电脑上存好。
+> 动手前先确认自己有一份**含 ART 的备份**。这块分区是整机上唯一单份、不可重建的
+> （里面是每台机器出厂时跑射频测试写进去的校准值和 MAC，网上没有能直接用的通用备份），
+> 写坏了这台机器的无线就永久没了。**整块备，别只切 64 KiB**：
+>
+> ```bash
+> N=$(cat /sys/class/block/mmcblk0p15/size)
+> dd if=/dev/mmcblk0p15 of=/root/backup/art.bin bs=512 count=$N
+> md5sum /root/backup/art.bin
+> ```
+>
+> 已有的备份（整盘 `dd if=/dev/mmcblk0` 或单分区都行）在电脑上跑
+> `python scripts/art-backup.py 备份文件` 即可验证里面有没有 ART、是不是空的、有没有被截断，
+> 用法与恢复流程见 [`docs/整体说明.md` 5.7](docs/整体说明.md)。
 > 4.2 的 `caldata-early` 每次开机都从这块分区重新切，分区本身永远只读、不会被它改动。
 
 刷完第一件事：**网络 → 接口 → WAN → 协议改 PPPoE**，填宽带账号。光猫桥接下 DHCP 拿不到地址，这一步不做就上不了网。拨通后 IPv6 会自动起来。
@@ -271,7 +282,8 @@ sysupgrade /tmp/fw.bin          # 保留配置；加 -n 则清空配置
 | [`docs/优化审计.md`](docs/优化审计.md) | 对比 GitHub 上 4 个同机型工程，列出可补的 5 个 A 级优化与不建议做的 C 级 |
 | [`docs/固件验收清单.md`](docs/固件验收清单.md) | 刷完怎么验：首启即验 / 功能 / 性能 / 稳定性，标注哪些能一键、哪些必须人肉 |
 
-脚本：`scripts/self-check.sh`（固件一键自检）、`scripts/wifi-diag.sh`（无线专项排障）。
+脚本：`scripts/self-check.sh`（固件一键自检）、`scripts/wifi-diag.sh`（无线专项排障）、
+`scripts/art-backup.py`（在电脑上校验备份里的 ART，见 5.7）。
 
 ## 已知风险
 

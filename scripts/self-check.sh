@@ -65,6 +65,25 @@ if [ -s "$CAL" ]; then ok "cal data在($(wc -c < "$CAL")字节)"; else no "缺 c
 if [ -f /etc/hotplug.d/firmware/11-ath11k-caldata ]; then ok "caldata热插拔脚本在"; else no "缺11-ath11k-caldata"; fi
 if [ -x /etc/init.d/caldata-early ]; then ok "caldata-early(开机早期提取)在"; else no "缺/etc/init.d/caldata-early"; fi
 
+# ART 分区（0:ART / mmcblk0p15）：整机唯一单份、不可重建，cal 就是从这块切的。
+# 顺带比一次 MD5，证明固件里的 cal 真是本机 ART 来的，不是别处残留的
+if [ -r /sys/class/block/mmcblk0p15/size ]; then
+	art_n=$(cat /sys/class/block/mmcblk0p15/size 2>/dev/null)
+	art_s=$(cat /sys/class/block/mmcblk0p15/start 2>/dev/null)
+	ok "ART分区在(p15 起始${art_s} ${art_n}扇区)"
+	dd if=/dev/mmcblk0p15 of=/tmp/.scart bs=4096 skip=1 count=16 2>/dev/null
+	if [ -s /tmp/.scart ]; then
+		a=$(md5sum /tmp/.scart 2>/dev/null | cut -d' ' -f1)
+		b=$(md5sum "$CAL" 2>/dev/null | cut -d' ' -f1)
+		if [ -n "$a" ] && [ "$a" = "$b" ]; then ok "cal与本机ART一致"; else no "cal与ART的MD5不符(cal来源可疑)"; fi
+	else
+		no "读不出ART内容，分区可能是空的"
+	fi
+	rm -f /tmp/.scart
+else
+	no "找不到mmcblk0p15，分区表被改过？"
+fi
+
 np=$(ls /sys/class/ieee80211/ 2>/dev/null | wc -w)
 if [ "$np" -ge 2 ]; then ok "phy $np 个"; else no "phy $np 个(期望2)"; fi
 nw=$(iw dev 2>/dev/null | grep -c Interface)
