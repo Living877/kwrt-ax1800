@@ -131,11 +131,13 @@ apply_wifi_defaults() {
 	done
 	[ "$i" -gt 0 ] || return 1
 
-	# 按频段定带宽：2.4G HT40，5G HE80（160MHz 在亚瑟上容易掉速）
+	# 按频段定带宽：2.4G HT20，5G HE80（160MHz 在亚瑟上容易掉速）
+	# 2.4G 用 HT20 而非 HT40：实测本机环境信道 1 至少 4 个邻居 AP 同频，
+	# 40MHz 会占 1+5 两个信道、重传率更高，拥挤环境下 HT20 吞吐反而更稳。
 	# 注意 band 值是 mac80211.uc 里 lc(band_name) 生成的小写 2g/5g
 	for r in $(uci -q show wireless | sed -n 's/^wireless\.\(radio[0-9]*\)=wifi-device$/\1/p'); do
 		case "$(uci -q get "wireless.$r.band")" in
-			2g) uci -q set "wireless.$r.htmode=HT40" ;;
+			2g) uci -q set "wireless.$r.htmode=HT20" ;;
 			5g) uci -q set "wireless.$r.htmode=HE80" ;;
 		esac
 		uci -q set "wireless.$r.disabled=0"

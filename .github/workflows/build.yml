@@ -325,6 +325,9 @@ jobs:
           # 再由 defconfig 按依赖重新解算（必需项会自动回来）
           sed -n '/# Wireless Drivers/,/# end of Wireless Drivers/p' .config | sed -e 's/=m/=n/' >> .config
           sed -i "s/\(kmod-qca.*\)=m/\1=n/" .config
+          # 本机无线是 AHB 接口，PCI 版驱动纯占空间；显式关成 =n（defconfig 若因
+          # 硬依赖拉回 =y，下面的「编译前校验」会报错拦住，避免又编进固件）
+          sed -i "s/\(kmod-ath11k-pci\)=.*/\1=n/" .config
           make defconfig
           echo "======== 关键项 ========"
           grep -E "^CONFIG_TARGET_qualcommax_ipq60xx_DEVICE_|^CONFIG_PACKAGE_(luci-theme-argon|luci-app-openclash|dnsmasq-full|kmod-tun|kmod-nft-tproxy|kmod-nft-fullcone|kmod-qca-nss-ecm|kmod-ath11k-ahb|wpad-mbedtls|sqm-scripts-nss)=" .config
@@ -375,6 +378,11 @@ jobs:
           fi
           if grep -q "^CONFIG_TARGET_ALL_PROFILES=y" .config; then
             echo "::error::还在编全机型，会让时间翻几倍"
+            fail=1
+          fi
+          # AX1800 Pro 无线是 AHB 接口，PCI 版驱动纯占空间，build-17 实测仍被装进去
+          if grep -qE "^CONFIG_PACKAGE_kmod-ath11k-pci=(y|m)" .config; then
+            echo "::error::kmod-ath11k-pci 还在，本机是 AHB 接口用不上，应 =n"
             fail=1
           fi
           [ "$fail" = 0 ] || exit 1
