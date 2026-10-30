@@ -215,6 +215,23 @@ jobs:
           # 设备级 diy/ 覆盖层（主题模板、banner、uci-defaults）最后铺上去
           cp -Rf ./diy/* ./ || true
 
+          # ---- iStore / 软件包菜单覆盖校验 ----
+          # luci-app-package-manager 被 luci-nginx、luci 硬依赖，摘不掉（2026-10-30 实机确认），
+          # 所以改成「iStore 占顶级 + 官方页挪到系统下」。这依赖三份覆盖同时落地，
+          # 少一份就会出现：菜单还叫软件包 / 两份抢同一路径 / iStore 里链接自我跳转。
+          # cp -Rf ./diy/* 失败是不报错的（|| true），所以这里必须显式断言。
+          sl=feeds/kiddin9/luci-app-store/luasrc/controller/store.lua
+          grep -q '"iStore", 30' "$sl" || { echo "::error::store.lua 覆盖没生效，菜单标题仍是 Software"; exit 1; }
+          mh=feeds/kiddin9/luci-app-store/luasrc/view/store/main.htm
+          grep -q 'admin/system/package-manager' "$mh" || { echo "::error::main.htm 覆盖没生效，iStore 里的软件包链接会自我跳转"; exit 1; }
+          ipm=$(find feeds -path "*luci-app-package-manager/root/usr/share/luci/menu.d/luci-app-package-manager.json" 2>/dev/null | head -1)
+          if [ -z "$ipm" ]; then
+            echo "::error::feeds 里找不到 luci-app-package-manager 的 menu.d，覆盖路径要重对"
+            exit 1
+          fi
+          grep -q 'admin/system/package-manager' "$ipm" || { echo "::error::$ipm 没被覆盖，它还在占 admin/package-manager，会把 iStore 顶掉"; exit 1; }
+          echo "[ok] 菜单覆盖到位: $ipm"
+
           # 注入 WiFi 密码：默认 12345678，配了 Secret(WIFI_KEY) 则用它覆盖
           # 仓库里只存占位符，不存任何密码明文
           WIFI_KEY="${WIFI_KEY:-12345678}"

@@ -38,7 +38,7 @@ Kwrt 把绝大多数 kmod 编成模块，内核里只留必需项。官方镜像
 | 存储 | `samba4`（U 盘共享给局域网）、`diskman`、`automount`、`block-mount`、`e2fsprogs`、`parted`、`fdisk` |
 | 工具 | `ttyd`、`quickfile`、`timedreboot`、`htop`、`nano`、`iperf3`、`iStore`、`zram-swap` |
 
-**明确不编**：Docker 全家（1G 跑不动）、`luci-app-istorerouter`、`luci-app-advancedplus`、`luci-app-footstrap-files`、`luci-app-package-manager`（菜单位让给 iStore）、`luci-app-watchcat`、`luci-app-frpc`。
+**明确不编**：Docker 全家（1G 跑不动）、`luci-app-istorerouter`、`luci-app-advancedplus`、`luci-app-footstrap-files`、`luci-app-package-manager`（**摘不掉**，`luci-nginx` 硬依赖；改成挪到「系统 → 软件包」）、`luci-app-watchcat`、`luci-app-frpc`。
 
 ## 相对上游改了什么
 
@@ -87,8 +87,18 @@ Kwrt 的 `feeds/kiddin9/luci-mod-status` 和上游差得比想象多：`index.js
 原理：官方 `index.js` 只有 `render()` 返回非 `null` 时才把卡片 `display` 设回 `''`，
 返回 `null` 或 `load()` 抛错的卡片会一直保持 `display:none`，不用改任何上游代码。
 
-菜单上，`luci-app-package-manager` 被摘掉后，覆写 `luci-app-store/luasrc/controller/store.lua`
-里的 3 行路径，把 iStore 从 `服务 → iStore`（order 31）挪到一级 `软件包`（`admin/package-manager`，order 30）。
+菜单上其实**摘不掉** `luci-app-package-manager`——`luci-nginx` 和 `luci` 两个包的 `Depends`
+里都硬写着它，从 `DEFAULT_PACKAGES` 删、`.config` 里 `is not set` 都压不住，`defconfig`
+会按依赖关系把它重新选上（2026-10-30 实机确认）。所以改成 coexistence：
+
+| 位置 | 内容 | 做法 |
+|---|---|---|
+| 左侧顶级 `iStore`（order 30） | 覆写 `store.lua` 的 4 行：路径 `admin/services/store` → `admin/package-manager`，标题 `_("Software")` → `iStore` | 本仓库 `diy/feeds/kiddin9/luci-app-store/` |
+| `系统 → 软件包` | 官方包管理页 | 覆写它的 `menu.d/luci-app-package-manager.json`，路径改成 `admin/system/package-manager` |
+| iStore 页内“更多插件请使用软件包” | 指向新的系统路径 | 覆写 `store/main.htm` 那一行 |
+
+三份覆盖少任何一份都会出问题：少第一份菜单还叫软件包；少第二份两份抢同一路径把 iStore 顶掉；
+少第三份点进去原地打转。构建里加了断言，`cp -Rf ./diy/*` 静默失败时会直接红。
 `{"admin","store",...}` 那些 AJAX 端点刻意不动，否则页面内的请求会全部 404。
 
 ### 4. 首次开机自动配置（`diy/.../uci-defaults/99-ax1800`）

@@ -103,8 +103,18 @@ info "rootfs $(df -h / 2>/dev/null | awk 'NR==2{print $3"/"$2"("$5")"}')"
 info "内存 $(free | awk '/^Mem:/{printf "%d/%dMB",$3/1024,$2/1024}')"
 
 if [ -f /usr/lib/lua/luci/controller/store.lua ]; then ok "iStore控制器在"; else no "缺store.lua"; fi
-pm=$(opkg list-installed 2>/dev/null | grep -c '^luci-app-package-manager')
-if [ "$pm" = "0" ]; then ok "package-manager已移除"; else no "package-manager仍在"; fi
+# luci-app-package-manager 被 luci-nginx / luci 硬依赖，摘不掉（2026-10-30 实机确认），
+# 所以只验两件事：官方页是否已挪到系统下、iStore 的菜单标题是否改对了
+if grep -q '"admin/system/package-manager"' /usr/share/luci/menu.d/luci-app-package-manager.json 2>/dev/null; then
+	ok "软件包已挪到系统下"
+else
+	no "package-manager 还占 admin/package-manager，会把 iStore 顶掉"
+fi
+if grep -q '"iStore", 30' /usr/lib/lua/luci/controller/store.lua 2>/dev/null; then
+	ok "iStore菜单标题正确"
+else
+	no "store.lua 里菜单标题不是 iStore"
+fi
 
 # controller 里 require 的 luci.* 模块必须真的存在，否则 dispatcher 建菜单时会抛
 # "module 'luci.x' not found"，整个 LuCI 500、网页全打不开（netstat 就是这么中招的）

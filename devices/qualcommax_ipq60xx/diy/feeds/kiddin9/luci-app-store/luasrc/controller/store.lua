@@ -1,12 +1,22 @@
 -- ⚠️ 这是 devices/qualcommax_ipq60xx/diy 下的覆盖版，源头是
 --    kiddin9/op-packages@main : luci-app-store/luasrc/controller/store.lua
---    上游一改，这份就要重新对一遍。相对上游只动了 3 行，全部有 ★ 标记：
+--    上游一改，这份就要重新对一遍。相对上游只动了 4 行，全部有 ★ 标记：
 --      ★ page_index              菜单父路径 services/store → package-manager
 --      ★ 一级菜单 entry          admin/services/store → admin/package-manager
 --      ★ 子页 entry              admin/services/store/pages → admin/package-manager/pages
---    目的：摘掉 luci-app-package-manager 后，左侧「软件包」(order 30) 直接就是 iStore，
---    不再多一个「服务 → iStore」。下面 {"admin","store",action} 是前端 AJAX 端点，
---    路径不能跟着改，否则页面里的请求全部 404。
+--      ★ 一级菜单标题            _("Software") → "iStore"
+--    目的：左侧顶级「iStore」(order 30) 直接打开商店，不再多一个「服务 → iStore」。
+--    下面 {"admin","store",action} 是前端 AJAX 端点，路径不能跟着改，
+--    否则页面里的请求全部 404。
+--
+--    ⚠️ luci-app-package-manager 是摘不掉的（2026-10-30 实机确认）：
+--       luci-nginx 和 luci 两个包的 Depends 里都硬写着它，从 DEFAULT_PACKAGES 删、
+--       .config 里 is not set 都压不住，defconfig 会因为依赖关系把它重新选上。
+--       所以官方「软件包」页只能共存，处理办法是：
+--         · 本文件占住 admin/package-manager 这个路径，当作 iStore 入口
+--         · 另用 diy 覆盖它的 menu.d，把它挪到「系统 → 软件包」，
+--           否则它会和这里抢同一路径，把 iStore 顶掉
+--         · iStore 页面里那句「更多插件请使用软件包」的链接同样要指到新路径
 module("luci.controller.store", package.seeall)
 
 local myopkg = "is-opkg"
@@ -23,7 +33,7 @@ function index()
 
     local action
 
-    entry({"admin", "package-manager"}, call("redirect_index"), _("Software"), 30).dependent = true
+    entry({"admin", "package-manager"}, call("redirect_index"), "iStore", 30).dependent = true
     entry({"admin", "package-manager", "pages"}, call("store_index")).leaf = true
     if nixio.fs.access("/usr/lib/lua/luci/view/store/main_dev.htm") then
         entry({"admin", "store", "dev"}, call("store_dev")).leaf = true
