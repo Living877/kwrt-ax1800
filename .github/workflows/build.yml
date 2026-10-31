@@ -59,6 +59,9 @@ jobs:
       libwrt_tree: ${{ steps.check.outputs.libwrt_tree }}
       libwrt_cfg: ${{ steps.check.outputs.libwrt_cfg }}
       oppackages: ${{ steps.check.outputs.oppackages }}
+      # 本次上游到底改了什么（markdown 片段），直接写进 Release 说明
+      changes: ${{ steps.check.outputs.changes }}
+      prev_build: ${{ steps.check.outputs.prev_build }}
     steps:
       - name: 检出工程
         uses: actions/checkout@v4
@@ -69,6 +72,8 @@ jobs:
           # 用 env 传进来，不要直接插值到 shell（commit message 可能含引号/反引号）
           EVENT_NAME: ${{ github.event_name }}
           COMMIT_MSG: ${{ github.event.head_commit.message }}
+          # compare API 要读上游仓库的提交列表，带 token 可避开匿名 60 次/小时的限流
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
           # 只判定 5 个真正决定固件内容的源：
@@ -139,6 +144,60 @@ jobs:
             echo "libwrt_cfg=$LC"
             echo "oppackages=$OP"
           } >> "$GITHUB_OUTPUT"
+
+          # ---------- 生成本次上游更新清单 ----------
+          # 目的：Release 页面能直接看到「这一版比上一版，上游到底动了什么」，
+          #       不用点进 5 个上游仓库逐个翻提交。
+          # 手段：GitHub compare API（old...new），不依赖本地 git 历史
+          #       ——  编译是 --depth 1 现拉的，本地根本没有旧提交。
+          PREV_BUILD=$( (grep -m1 '^build=' "$STATE" 2>/dev/null || true) | cut -d= -f2- )
+          echo "prev_build=${PREV_BUILD}" >> "$GITHUB_OUTPUT"
+
+          CH="$RUNNER_TEMP/changes.md"
+          : > "$CH"
+
+          repo_note() {
+            slug=$1; label=$2; new=$3; old=$4
+            if [ -z "$old" ]; then
+              printf -- '- **%s** `%s`（首次记录，无对比基准）\n' \
+                "$label" "$(echo "$new" | cut -c1-7)" >> "$CH"
+              return 0
+            fi
+            [ "$old" = "$new" ] && return 0
+            printf -- '- **%s** `%s` → `%s`\n' \
+              "$label" "$(echo "$old" | cut -c1-7)" "$(echo "$new" | cut -c1-7)" >> "$CH"
+            raw=$(gh api "repos/$slug/compare/$old...$new" 2>/dev/null || true)
+            if [ -z "$raw" ]; then
+              printf '  - _取不到提交列表（API 异常或历史已分叉）_\n' >> "$CH"
+              return 0
+            fi
+            total=$(printf '%s' "$raw" | jq -r '.total_commits // 0')
+            case "$total" in ''|*[!0-9]*) total=0 ;; esac
+            printf '  - 共 %s 条提交：\n' "$total" >> "$CH"
+            printf '%s' "$raw" | jq -r \
+              '.commits[-10:][] | "    - [`\(.sha[0:7])`](\(.html_url)) \(.commit.message | split("\n")[0] | .[0:100])"' \
+              >> "$CH"
+            if [ "$total" -gt 10 ]; then
+              printf '    - ……另 %s 条见上方链接\n' "$((total - 10))" >> "$CH"
+            fi
+          }
+
+          repo_note openwrt/openwrt         "openwrt 主树"     "$OW" "$(prev openwrt)"
+          repo_note immortalwrt/immortalwrt "immortalwrt"      "$IW" "$(prev immortalwrt)"
+          repo_note LiBwrt/openwrt-6.x      "LiBwrt NSS 树"    "$LT" "$(prev libwrt_tree)"
+          repo_note LiBwrt/LibWrt           "LibWrt 配置"      "$LC" "$(prev libwrt_cfg)"
+          repo_note kiddin9/op-packages     "op-packages 插件" "$OP" "$(prev oppackages)"
+
+          if [ ! -s "$CH" ]; then
+            printf '_上游 5 个源均无新提交（本次由手动触发或 [build] 标记触发）_\n' > "$CH"
+          fi
+          {
+            echo "changes<<__CHANGES_EOF__"
+            cat "$CH"
+            echo "__CHANGES_EOF__"
+          } >> "$GITHUB_OUTPUT"
+          echo "=== 本次上游更新 ==="
+          cat "$CH"
 
   build:
     needs: probe
@@ -463,6 +522,9 @@ jobs:
           #   (https://api.github.com/repos/openwrt/openwrt/releases)
           # build #11 就是死在这里，编译 4h47m 全白费在最后 3 秒。
           GH_REPO: ${{ github.repository }}
+          # probe 阶段算好的「本次上游更新」清单（多行 markdown）
+          CHANGES: ${{ needs.probe.outputs.changes }}
+          PREV_BUILD: ${{ needs.probe.outputs.prev_build }}
         run: |
           cd openwrt/bin/targets/qualcommax/ipq60xx
           f=$(ls *jdcloud_re-ss-01-squashfs-factory.bin | head -1)
@@ -498,6 +560,20 @@ jobs:
             echo "| 机型补丁 | q6 85MiB · ath11k 16VDEV/512peers |"
             echo "| 默认 | 192.168.1.1 · 主机名 OpenWrt · SSID CLI |"
             echo "| 上游 | openwrt-25.12 \`$OW_SHORT\` · LibWrt NSS \`$LT_SHORT\` |"
+            echo
+            # 上游更新清单：probe 阶段用 compare API 拉的提交列表。
+            # 目的就是「打开 Release 页面就知道这版比上版新在哪」，不用点进 5 个上游仓库。
+            echo "## 本次上游更新"
+            echo
+            if [ -n "${PREV_BUILD}" ]; then
+              echo "对比基准：[build-${PREV_BUILD}](https://github.com/${{ github.repository }}/releases/tag/build-${PREV_BUILD}) → 本版 build-${GITHUB_RUN_NUMBER}"
+              echo
+            fi
+            if [ -n "${CHANGES}" ]; then
+              echo "${CHANGES}"
+            else
+              echo "_本次未采集到上游变更记录_"
+            fi
             echo
             # A5：把 .manifest 里的核心组件版本写进 Release 说明。
             # 以后排查「这版到底是哪个版本的 dnsmasq / wpad」不用先去下 50MB 的包。
