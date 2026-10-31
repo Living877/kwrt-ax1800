@@ -20,6 +20,18 @@ git clone https://github.com/qosmio/sqm-scripts-nss.git package/sqm-scripts-nss
 sed -i "/ECM_INTERFACE_RAWIP_ENABLE/d"  package/nss-packages/qca-nss-ecm/Makefile
 rm -rf package/nss-packages/nss-userspace-oss
 
+# 2026-10-31：摘掉上游 nss-packages 新加的 0028-exp_event 补丁（run #24 的失败点）。
+# 本树内核走 LiBwrt 25.12-nss 的 hack 952（CONFIG_NF_CONNTRACK_CHAIN_EVENTS），
+# ECM 注册的是 struct notifier_block，根本不会调 exp_event；该补丁加出来的
+# ecm_conntrack_exp_event() 于是成了「定义了但没人引用」的 static 函数，
+# 而 qca-nss-ecm 源码 Makefile 是 ccflags-y += -Wall -Werror → unused-function 直接算 error。
+# 对 chain-events 树无功能影响；等上游把补丁改成 #ifndef CONFIG_NF_CONNTRACK_CHAIN_EVENTS 再放开。
+rm -f package/nss-packages/qca-nss-ecm/patches/0028-*.patch
+if ls package/nss-packages/qca-nss-ecm/patches/0028-*.patch >/dev/null 2>&1; then
+	echo "[x] 0028-exp_event 补丁仍在，摘除失败" >&2
+	exit 1
+fi
+
 sed -i "s/luci uboot-envtools wpad-openssl/luci uboot-envtools wpad-mbedtls/" target/linux/qualcommax/Makefile
 
 # ============================================================
