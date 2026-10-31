@@ -174,6 +174,7 @@ build-13 的实测首启：`qca-nss` probe `-110`、`qmi failed to load CAL data
    - `*-squashfs-factory.bin` —— **U-Boot `/uimage.html` 刷这个**
    - `*-squashfs-sysupgrade.bin` —— 以后 LuCI 升级用
    - `*.manifest` / `md5sums.txt`
+   - 正文含**「本次上游更新」**清单 —— 这版比上版，上游具体改了哪些提交
 
 **四道校验**（都是踩坑后加的）：
 
@@ -274,6 +275,10 @@ sysupgrade /tmp/fw.bin          # 保留配置；加 -n 则清空配置
 | `kiddin9/op-packages` | `main` | argon / openclash / fullconenat-nft 等插件（原 turboacc 已删） |
 
 跟上一次成功构建的记录（`.build-state`）比对，**完全一致就跳过**，有变化才编。编译失败不发 Release，保留上一个可用版本，不会出现「自动编坏了还推给你」。
+
+编完后 Release 正文会有一节 **「本次上游更新」**，列出这版比上版各上游具体多了哪些提交（短 sha 可点、每源最多 10 条），不用去五个上游仓库挨个翻。清单由 `probe` 用 compare API 生成 —— 编译是 `--depth 1` 现拉的，本地没有旧提交，`git log` 比不出来。
+
+> 注意 `kiddin9/op-packages` 每天会自动 `🏅 Sync` 好几次，所以「上游有变化」几乎天天成立，很多时候清单里唯一一条就是那条 `Sync`，对固件内容其实没影响。
 
 编译成功但卡在最后「发布 Release」这一步时，`publish.yml` 会通过 `workflow_run` **自动从 artifact 补发一次**（30 秒，不用重编 3 小时）；补发也失败时会把 `gh` 的原始报错写成注解，`Actions → 发布已有产物` 里能直接看到原因。
 
